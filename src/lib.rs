@@ -324,28 +324,17 @@ const VIDEO_DCT_COEFF: [(i16, u16); 224] = [
 ];
 
 
-fn read_huffman<T: std::io::Read>(table: &[(i16, i16)], stream: &mut MyBitReader<T>) -> Option<i16> {
-
-    let mut state = (0i16, 0i16);
-
-    loop {
-        state = table[(state.0 + (stream.read::<u8>(1).unwrap() as i16)) as usize];
-
-        if state.0 == 0 {
-            break;
-        }
-    }
-    Some(state.1)
-}
-
-fn read_huffman_u16<T: std::io::Read>(table: &[(i16, u16)], stream: &mut MyBitReader<T>) -> Option<u16> {
-
-    let mut state = (0i16, 0u16);
+fn read_huffman<T, S>(table: &[(i16, S)], stream: &mut MyBitReader<T>) -> Option<S>
+where
+    T: Read,
+    S: bitstream_io::Numeric
+{
+    let mut state: (i16, S) = (0, S::default());
 
     loop {
-        state = table[(state.0 + (stream.read::<u8>(1).unwrap() as i16)) as usize];
+        state = table[usize::try_from(state.0 + stream.read::<i16>(1).unwrap()).unwrap()];
 
-        if state.0 == 0 {
+        if state.0 <= 0 {
             break;
         }
     }
@@ -524,7 +513,8 @@ impl Slice {
             loop {
                 let mut level = 0i32;
                 let mut run = 0u8;
-                let coeff = read_huffman_u16(&VIDEO_DCT_COEFF, bs).unwrap();
+
+                let coeff = read_huffman(&VIDEO_DCT_COEFF, bs).unwrap();
 
                 if (coeff == 0x0001) && (n > 0) && (bs.read::<u8>(1).unwrap() == 0) {
                     break;
