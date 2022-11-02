@@ -151,13 +151,7 @@ fn is_slice_start_code(b: &[u8; 4]) -> bool {
 }
 
 type MyBitReader<'a, T: std::io::Read> = bitstream_io::BitReader<&'a mut std::io::BufReader<T>, bitstream_io::BigEndian>;
-
-fn parse_macroblock_address_increment<T: std::io::Read>(bs: &mut MyBitReader<T>) -> Option<u8> {
-    match bs.read::<u8>(1).unwrap() {
-        1 => return Some(1),
-        _ => unimplemented!("other encodings not supported yet")
-    }
-}
+type MyBitReader<'a, T: Read+Seek> = bitstream_io::BitReader<&'a mut std::io::BufReader<T>, bitstream_io::BigEndian>;
 
 fn parse_macroblock_type<T: std::io::Read>(bs: &mut MyBitReader<T>) -> Option<u8> {
 
@@ -330,6 +324,49 @@ const VIDEO_DCT_COEFF: [(i16, u16); 224] = [
 	(       0,   0x1c01), (       0,   0x1b01),  // 111: 0000 0000 0001 111x
 ];
 
+// Why do some offset have an index of -1, while others are 0?
+const VIDEO_MACROBLOCK_ADDRESS_INCREMENT: [(i16, i16); 80] = [
+	(  1 << 1,    0), (       0,    1),  //   0: x
+	(  2 << 1,    0), (  3 << 1,    0),  //   1: 0x
+	(  4 << 1,    0), (  5 << 1,    0),  //   2: 00x
+	(       0,    3), (       0,    2),  //   3: 01x
+	(  6 << 1,    0), (  7 << 1,    0),  //   4: 000x
+	(       0,    5), (       0,    4),  //   5: 001x
+	(  8 << 1,    0), (  9 << 1,    0),  //   6: 0000x
+	(       0,    7), (       0,    6),  //   7: 0001x
+	( 10 << 1,    0), ( 11 << 1,    0),  //   8: 0000 0x
+	( 12 << 1,    0), ( 13 << 1,    0),  //   9: 0000 1x
+	( 14 << 1,    0), ( 15 << 1,    0),  //  10: 0000 00x
+	( 16 << 1,    0), ( 17 << 1,    0),  //  11: 0000 01x
+	( 18 << 1,    0), ( 19 << 1,    0),  //  12: 0000 10x
+	(       0,    9), (       0,    8),  //  13: 0000 11x
+	(      -1,    0), ( 20 << 1,    0),  //  14: 0000 000x
+	(      -1,    0), ( 21 << 1,    0),  //  15: 0000 001x
+	( 22 << 1,    0), ( 23 << 1,    0),  //  16: 0000 010x
+	(       0,   15), (       0,   14),  //  17: 0000 011x
+	(       0,   13), (       0,   12),  //  18: 0000 100x
+	(       0,   11), (       0,   10),  //  19: 0000 101x
+	( 24 << 1,    0), ( 25 << 1,    0),  //  20: 0000 0001x
+	( 26 << 1,    0), ( 27 << 1,    0),  //  21: 0000 0011x
+	( 28 << 1,    0), ( 29 << 1,    0),  //  22: 0000 0100x
+	( 30 << 1,    0), ( 31 << 1,    0),  //  23: 0000 0101x
+	( 32 << 1,    0), (      -1,    0),  //  24: 0000 0001 0x
+	(      -1,    0), ( 33 << 1,    0),  //  25: 0000 0001 1x
+	( 34 << 1,    0), ( 35 << 1,    0),  //  26: 0000 0011 0x
+	( 36 << 1,    0), ( 37 << 1,    0),  //  27: 0000 0011 1x
+	( 38 << 1,    0), ( 39 << 1,    0),  //  28: 0000 0100 0x
+	(       0,   21), (       0,   20),  //  29: 0000 0100 1x
+	(       0,   19), (       0,   18),  //  30: 0000 0101 0x
+	(       0,   17), (       0,   16),  //  31: 0000 0101 1x
+	(       0,   35), (      -1,    0),  //  32: 0000 0001 00x
+	(      -1,    0), (       0,   34),  //  33: 0000 0001 11x
+	(       0,   33), (       0,   32),  //  34: 0000 0011 00x
+	(       0,   31), (       0,   30),  //  35: 0000 0011 01x
+	(       0,   29), (       0,   28),  //  36: 0000 0011 10x
+	(       0,   27), (       0,   26),  //  37: 0000 0011 11x
+	(       0,   25), (       0,   24),  //  38: 0000 0100 00x
+	(       0,   23), (       0,   22),  //  39: 0000 0100 01x
+];
 
 fn read_huffman<T, S>(table: &[(i16, S)], stream: &mut MyBitReader<T>) -> Option<S>
 where
@@ -606,10 +643,19 @@ impl Slice {
         }
     }
 
-    fn parse_macroblock<T: std::io::Read>(&mut self, bs: &mut MyBitReader<T>) -> Option<()> {
+    fn parse_macroblock<T: Read+Seek>(&mut self, bs: &mut MyBitReader<T>, slice: u8) -> Option<()> {
 
-        println!("parse_macroblock");
-        let addr_inc = parse_macroblock_address_increment(bs).unwrap();
+        let mut addr_inc = read_huffman(&VIDEO_MACROBLOCK_ADDRESS_INCREMENT, bs).unwrap();
+        // println!("addr_inc={}", addr_inc);
+
+        while addr_inc == 34 {
+            addr_inc = read_huffman(&VIDEO_MACROBLOCK_ADDRESS_INCREMENT, bs).unwrap();
+        }
+
+        while addr_inc == 35 {
+            unimplemented!("");
+        }
+
         let macro_type = parse_macroblock_type(bs).unwrap();
 
         // Can only deal with I-frames for now.
