@@ -11,12 +11,19 @@
 
 use bitstream_io::BitRead;
 use std::io;
-use std::io::Read;
+use std::io::{BufReader, Seek, Read, SeekFrom};
+use std::io::Write;
+use std::fs::File;
 use std::fs::OpenOptions;
 
 const SEQUENCE_HEADER: [u8; 4] = [0x00, 0x00, 0x01, 0xB3];
 const GROUP_OF_PICTURES_START_CODE: [u8; 4] = [0x00, 0x00, 0x01, 0xB8];
 const PICTURE_START_CODE: [u8; 4] = [0x00, 0x00, 0x01, 0x00];
+const PACK_START_CODE: u8 = 0xBA;
+const SYSTEM_HEADER_START_CODE: u8 = 0xBB;
+const PACKET_START_CODE: u8 = 0xBC;
+const AUDIO_STREAM_0_START_CODE: u8 = 0xC0;
+const VIDEO_STREAM_0_START_CODE: u8 = 0xE0;
 
 const VIDEO_INTRA_QUANT_MATRIX: [u8; 64] = [
 	 8, 16, 19, 22, 26, 27, 29, 34,
@@ -365,6 +372,146 @@ impl Plane {
             height: h,
             data: vec![0; (i32::from(w)*i32::from(h)).try_into().unwrap()]
         }
+    }
+}
+
+struct Pack {
+    data: [u8; 8]
+}
+
+impl Pack {
+    fn parse<F: Read>(f: &mut F) -> io::Result<Self> {
+        let mut ret = Pack {
+            data: [0; 8]
+        };
+        f.read_exact(&mut ret.data)?;
+        Ok(ret)
+    }
+}
+
+struct SystemHeader {
+    data: Vec<u8>
+}
+
+impl SystemHeader {
+    fn parse<F: Read>(f: &mut F) -> io::Result<Self> {
+
+        let mut buf = [0; 2];
+        f.read_exact(&mut buf)?;
+        let hdr_len = u16::from_be_bytes(buf);
+
+        let mut ret = Self {
+            data: vec![0; hdr_len.into()]
+        };
+
+        f.read_exact(&mut ret.data.as_mut_slice())?;
+
+        Ok(ret)
+    }
+}
+
+fn is_start_code(b: &[u8; 4], code: u8) -> bool {
+    b[0] == 0 && b[1] == 0 && b[2] == 1 && b[3] == code
+}
+
+fn is_packet_start_code(b: &[u8; 4]) -> bool {
+    b[0] == 0 && b[1] == 0 && b[2] == 1 && b[3] >= 0xBC
+}
+
+struct Packet {
+    data: Vec<u8>
+}
+
+impl Packet {
+
+    fn parse<F: Read+Seek>(f: &mut F, stream_id: u8) -> io::Result<Self> {
+
+        let offset = f.stream_position().unwrap();
+        println!("stream id=0x{:x} at offset {}(0x{:x})", stream_id, offset, offset);
+
+        let mut packet_len_buf = [0; 2];
+        f.read_exact(&mut packet_len_buf)?;
+        let packet_len = u16::from_be_bytes(packet_len_buf);
+
+        println!("packet len={}", packet_len);
+
+        let mut data = vec![0; packet_len.into()];
+
+        f.read_exact(&mut data.as_mut_slice())?;
+
+        let mut idx = 0;
+
+        loop {
+            if data[idx] != 0xFF {
+                break;
+            }
+            idx += 1;
+        }
+
+        // buffer scale and size
+        if (data[idx] & 0b01000000) > 0 {
+            idx += 2;
+        }
+
+        // presentation time stamp (PTS)
+        if (data[idx] & 0b00110000) > 0 {
+            // presentation time stamp (PTS) and decoding time stamp (DTS)
+            idx += 10;
+        } else if (data[idx] & 0b00100000) > 0 {
+            idx += 5;
+        } else {
+            idx += 1;
+        }
+
+        println!("packet header len={}", idx);
+
+        Ok(Packet {data: data[idx..].to_vec()})
+    }
+}
+
+fn parse_pack<F: Read+Seek>(f: &mut F, fout: &mut File) -> io::Result<()> {
+    let pack = Pack::parse(f)?;
+
+    let mut buf = [0; 4];
+    f.read_exact(&mut buf)?;
+
+    if is_start_code(&buf, SYSTEM_HEADER_START_CODE) {
+        let system_header = SystemHeader::parse(f)?;
+    } else {
+        f.seek(SeekFrom::Current(-4))?;
+    }
+
+    loop {
+        f.read_exact(&mut buf)?;
+
+        if !is_packet_start_code(&buf) {
+            f.seek(SeekFrom::Current(-4))?;
+            break;
+        }
+
+        let packet = Packet::parse(f, buf[3])?;
+
+        if buf[3] == VIDEO_STREAM_0_START_CODE {
+
+            fout.write_all(&packet.data)?;
+        }
+    }
+
+    Ok(())
+}
+
+pub fn iso11172_stream<F: Read+Seek>(f: &mut F, fout: &mut File) -> io::Result<()> {
+
+    loop {
+
+        let mut buf = [0; 4];
+        f.read_exact(&mut buf)?;
+
+        if !is_start_code(&buf, 0xBA) {
+            return Ok(());
+        }
+
+        parse_pack(f, fout)?;
     }
 }
 
