@@ -629,8 +629,9 @@ struct Container {
     mb_height: i32,
     mb_size: i32,
     width: u16,
-    height: u16
-    // mb_address: i32
+    height: u16,
+    quantizer_scale: u8,
+    dc_predictor: [i32; 3]
 }
 
 #[inline(always)]
@@ -641,6 +642,14 @@ fn clamp(n: i32) -> u8 {
         return 0;
     }
     return n as u8;
+}
+
+fn decode_dc_diff(coded: u8, size: u8) -> i16 {
+    if coded & (1 << (size - 1)) != 0 {
+        return coded.into();
+    } else {
+        return (-1i16 << size)|i16::from(coded+1)
+    }
 }
 
 impl Container {
@@ -658,8 +667,9 @@ impl Container {
             mb_height: mb_height,
             mb_size: mb_width * mb_height,
             width: width,
-            height: height
-            // mb_address: 0
+            height: height,
+            quantizer_scale: 0,
+            dc_predictor: [128; 3]
         }
     }
 
@@ -674,8 +684,8 @@ impl Container {
         self.mb_addr = (i32::from(slice_nr) - 1) * self.mb_width - 1;
 
         let mut stream: MyBitReader<T> = bitstream_io::BitReader::new(f);
-        let quantizer_scale: u8 = stream.read::<u8>(5).unwrap();
-        println!("quantizer_scale={}", quantizer_scale);
+        self.quantizer_scale = stream.read::<u8>(5).unwrap();
+        trace!("slice quantizer_scale={}", self.quantizer_scale);
 
         // Extra slice info
         loop {
@@ -740,10 +750,9 @@ impl Container {
         trace!("mb_addr={}, mb_row={}, mb_col={}, addr_inc={}, type={}, slice_nr={}",
                self.mb_addr, self.mb_row, self.mb_col, addr_inc, macro_type, slice);
 
-        let mut quantizer_scale = 1;
         if (macro_type & 0b1_0000) == 1 {
-            quantizer_scale = bs.read::<u8>(5).unwrap();
-            trace!("quantizer_scale={}", quantizer_scale);
+            self.quantizer_scale = bs.read::<u8>(5).unwrap();
+            trace!("quantizer_scale={}", self.quantizer_scale);
         }
 
         // Ignore motion vectors and block patterns since they are irrelevant for I-frames.
@@ -753,6 +762,8 @@ impl Container {
         for i in 0 .. 6 {
 
             let mut block_data = [0i32; 64];
+            let plane_index = if i < 4 { 0 } else { i - 3 };
+            let predictor = self.dc_predictor[plane_index];
 
             let table = if i < 4 {
                 VIDEO_DCT_SIZE_LUMINANCE
@@ -761,18 +772,19 @@ impl Container {
             };
 
             let size_lum: u8 = parse_dct_dc_size(&table, bs).unwrap();
-            trace!("block={}, dct_size={}", i, size_lum);
+            trace!("block={}, dct_size={}, predictor={}", i, size_lum, predictor);
 
             if size_lum > 0 {
                 let dc_diff_coded = bs.read::<u8>(size_lum.into()).unwrap();
                 trace!("block={}, dct_diff={}", i, dc_diff_coded);
-                let dc_diff: i16 = {
-                    if dc_diff_coded & (1 << (size_lum - 1)) != 0 {
-                        dc_diff_coded.into()
-                    } else {
-                        (-1i16 << size_lum)|i16::from(dc_diff_coded+1)
-                    }};
+                block_data[0] = predictor + i32::from(decode_dc_diff(dc_diff_coded, size_lum));
+            } else {
+                block_data[0] = predictor;
             }
+
+            self.dc_predictor[plane_index] = block_data[0];
+
+            block_data[0] <<= (3 + 5);
 
             assert!((macro_type & 0b1_0000) != 0);
             // For n = 1 to be valid, must be an I-frame.
@@ -829,7 +841,7 @@ impl Container {
                     level += if level < 0 { -1 } else { 1 };
                 }
 
-                level = (level * i32::from(quantizer_scale) *
+                level = (level * i32::from(self.quantizer_scale) *
                          i32::from(VIDEO_INTRA_QUANT_MATRIX[usize::from(de_zig_zagged)])) >> 4;
 
                 if (level & 1) == 0 {
