@@ -16,6 +16,9 @@ use std::io::Write;
 use std::fs::File;
 use std::fs::OpenOptions;
 
+extern crate log;
+use log::{trace};
+
 const PACK_START_CODE: u8 = 0xBA;
 const SYSTEM_HEADER_START_CODE: u8 = 0xBB;
 const PACKET_START_CODE: u8 = 0xBC;
@@ -733,13 +736,13 @@ impl Container {
         self.mb_col   = self.mb_addr % self.mb_width;
 
 
-        println!("mb_addr={}, mb_row={}, mb_col={}, addr_inc={}, type={}, slice_nr={}",
-                 self.mb_addr, self.mb_row, self.mb_col, addr_inc, macro_type, slice);
+        trace!("mb_addr={}, mb_row={}, mb_col={}, addr_inc={}, type={}, slice_nr={}",
+               self.mb_addr, self.mb_row, self.mb_col, addr_inc, macro_type, slice);
 
         let mut quantizer_scale = 1;
         if (macro_type & 0b1_0000) == 1 {
             quantizer_scale = bs.read::<u8>(5).unwrap();
-            println!("quantizer_scale={}", quantizer_scale);
+            trace!("quantizer_scale={}", quantizer_scale);
         }
 
         // Ignore motion vectors and block patterns since they are irrelevant for I-frames.
@@ -757,25 +760,24 @@ impl Container {
             };
 
             let size_lum: u8 = parse_dct_dc_size(&table, bs).unwrap();
-            println!("block={}, dct_size={}", i, size_lum);
+            trace!("block={}, dct_size={}", i, size_lum);
 
             if size_lum > 0 {
                 let dc_diff_coded = bs.read::<u8>(size_lum.into()).unwrap();
-                println!("block={}, dct_diff={}", i, dc_diff_coded);
+                trace!("block={}, dct_diff={}", i, dc_diff_coded);
                 let dc_diff: i16 = {
                     if dc_diff_coded & (1 << (size_lum - 1)) != 0 {
                         dc_diff_coded.into()
                     } else {
                         (-1i16 << size_lum)|i16::from(dc_diff_coded+1)
                     }};
-                // println!("dc_diff_coded={}, dc_diff={}", dc_diff_coded, dc_diff);
             }
 
             assert!((macro_type & 0b1_0000) != 0);
             // For n = 1 to be valid, must be an I-frame.
             let mut n = 1;
 
-            print!("coeff= ");
+            let mut coeff_str: String = "coeff= ".to_owned();
 
             loop {
                 let mut level = 0i32;
@@ -785,7 +787,7 @@ impl Container {
                 let coeff = read_huffman(&VIDEO_DCT_COEFF, bs).unwrap();
 
                 if (coeff == 0x0001) && (n > 0) && (bs.read::<u8>(1).unwrap() == 0) {
-                    print!("{}", coeff);
+                    coeff_str.push_str(&format!("{}", coeff));
                     break;
                 }
 
@@ -809,7 +811,7 @@ impl Container {
                 }
 
                 let post = bs.position_in_bits().unwrap();
-                print!("{} ({},{}) {} {} ", coeff, run, level, pre, post);
+                coeff_str.push_str(&format!("{} ({},{}) {} {} ", coeff, run, level, pre, post));
 
                 n += run;
 
@@ -843,7 +845,7 @@ impl Container {
 
             }
 
-            println!("");
+            trace!("{}", coeff_str);
 
             // for i in 0..64 {
             //     print!("{} ", block_data[i]);
