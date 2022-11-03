@@ -13,6 +13,7 @@ use bitstream_io::BitRead;
 use std::io;
 use std::io::{BufReader, Seek, Read, SeekFrom};
 use std::io::Write;
+use std::fmt::Write as FmtWrite;
 use std::fs::File;
 use std::fs::OpenOptions;
 
@@ -777,7 +778,7 @@ impl Container {
             // For n = 1 to be valid, must be an I-frame.
             let mut n = 1;
 
-            let mut coeff_str: String = "coeff= ".to_owned();
+            let mut coeff_str: String = "coeff= ".to_string();
 
             loop {
                 let mut level = 0i32;
@@ -787,7 +788,7 @@ impl Container {
                 let coeff = read_huffman(&VIDEO_DCT_COEFF, bs).unwrap();
 
                 if (coeff == 0x0001) && (n > 0) && (bs.read::<u8>(1).unwrap() == 0) {
-                    coeff_str.push_str(&format!("{}", coeff));
+                    write!(coeff_str, "{}", coeff);
                     break;
                 }
 
@@ -811,7 +812,7 @@ impl Container {
                 }
 
                 let post = bs.position_in_bits().unwrap();
-                coeff_str.push_str(&format!("{} ({},{}) {} {} ", coeff, run, level, pre, post));
+                write!(coeff_str, "{} ({},{}) {} {} ", coeff, run, level, pre, post);
 
                 n += run;
 
@@ -841,16 +842,18 @@ impl Container {
                     level = -2048;
                 }
 
+                write!(coeff_str, ", level={}", level);
                 block_data[usize::from(de_zig_zagged)] = level * VIDEO_PREMULTIPLIER_MATRIX[usize::from(de_zig_zagged)];
 
             }
 
             trace!("{}", coeff_str);
 
-            // for i in 0..64 {
-            //     print!("{} ", block_data[i]);
-            // }
-            // println!("");
+            let mut block_str = "".to_string();
+            for i in 0..64 {
+                write!(block_str, "{} ", block_data[i]);
+            }
+            trace!("{}", block_str);
 
             let mut d = match i {
                 4 => &mut frame.cb.data,
