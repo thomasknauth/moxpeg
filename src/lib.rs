@@ -16,14 +16,19 @@ use std::io::Write;
 use std::fs::File;
 use std::fs::OpenOptions;
 
-const SEQUENCE_HEADER: [u8; 4] = [0x00, 0x00, 0x01, 0xB3];
-const GROUP_OF_PICTURES_START_CODE: [u8; 4] = [0x00, 0x00, 0x01, 0xB8];
-const PICTURE_START_CODE: [u8; 4] = [0x00, 0x00, 0x01, 0x00];
 const PACK_START_CODE: u8 = 0xBA;
 const SYSTEM_HEADER_START_CODE: u8 = 0xBB;
 const PACKET_START_CODE: u8 = 0xBC;
 const AUDIO_STREAM_0_START_CODE: u8 = 0xC0;
 const VIDEO_STREAM_0_START_CODE: u8 = 0xE0;
+
+const GROUP_OF_PICTURES_START_VALUE: u8 = 0xB8;
+const SEQUENCE_HEADER_START_VALUE: u8 = 0xB3;
+const PICTURE_START_VALUE: u8 = 0x00;
+const START_EXTENSION: u8 = 0xB5;
+const START_USER_DATA: u8 = 0xB2;
+
+const FRAME_TYPE_I: u8 = 0b001;
 
 const VIDEO_INTRA_QUANT_MATRIX: [u8; 64] = [
 	 8, 16, 19, 22, 26, 27, 29, 34,
@@ -150,7 +155,6 @@ fn is_slice_start_code(b: &[u8; 4]) -> bool {
     b[0] == 0x0 && b[1] == 0x0 && b[2] == 0x01 && b[3] >= 0x01 && b[3] <= 0xAF
 }
 
-type MyBitReader<'a, T: std::io::Read> = bitstream_io::BitReader<&'a mut std::io::BufReader<T>, bitstream_io::BigEndian>;
 type MyBitReader<'a, T: Read+Seek> = bitstream_io::BitReader<&'a mut std::io::BufReader<T>, bitstream_io::BigEndian>;
 
 fn parse_macroblock_type<T: std::io::Read>(bs: &mut MyBitReader<T>) -> Option<u8> {
@@ -392,10 +396,6 @@ fn parse_dct_dc_size<T: std::io::Read>(table: &[(i16, i16); 18], bs: &mut MyBitR
     }
 }
 
-fn parse_block<T: std::io::Read>(bs: &mut MyBitReader<T>) -> Option<()> {
-    Some(())
-}
-
 struct Plane {
     width: u16,
     height: u16,
@@ -447,8 +447,16 @@ impl SystemHeader {
     }
 }
 
+fn is_any_start_code(b: &[u8; 4]) -> bool {
+    b[0] == 0 && b[1] == 0 && b[2] == 1
+}
+
 fn is_start_code(b: &[u8; 4], code: u8) -> bool {
     b[0] == 0 && b[1] == 0 && b[2] == 1 && b[3] == code
+}
+
+fn is_video_layer_start_code(b: &[u8; 4]) -> bool {
+    b[0] == 0 && b[1] == 0 && b[2] == 1 && b[3] >= 0 && b[3] <= GROUP_OF_PICTURES_START_VALUE
 }
 
 fn is_packet_start_code(b: &[u8; 4]) -> bool {
@@ -609,12 +617,16 @@ fn block_set(dest: &mut Vec<u8>,
     }
 }
 
-struct Slice {
+struct Container {
     mb_row: i32,
     mb_col: i32,
     mb_addr: i32,
     mb_width: i32,
-    mb_height: i32
+    mb_height: i32,
+    mb_size: i32,
+    width: u16,
+    height: u16
+    // mb_address: i32
 }
 
 #[inline(always)]
@@ -627,20 +639,75 @@ fn clamp(n: i32) -> u8 {
     return n as u8;
 }
 
-impl Slice {
+impl Container {
 
-    fn new() -> Self {
+    fn new(width: u16, height: u16) -> Self {
 
-        let w = 640;
-        let h = 360;
+        let mb_width = (i32::from(width) + 15) / 16;
+        let mb_height = (i32::from(height) + 15) / 16;
 
-        Slice {
+        Container {
             mb_row: 0,
             mb_col: 0,
             mb_addr: -1,
-            mb_width: (w + 15) / 16,
-            mb_height: (h + 15) / 16,
+            mb_width: mb_width,
+            mb_height: mb_height,
+            mb_size: mb_width * mb_height,
+            width: width,
+            height: height
+            // mb_address: 0
         }
+    }
+
+    fn parse_slice<T>(&mut self, f: &mut std::io::BufReader<T>, slice_nr: u8) -> io::Result<()>
+    where T: std::io::Read + std::io::Seek
+    {
+        println!("Slice start code at stream offset 0x{:x} bytes. slice_nr={}.",
+                 f.seek(SeekFrom::Current(0)).unwrap() - 4, slice_nr);
+
+        f.seek(SeekFrom::Current(4)).is_ok();
+
+        self.mb_addr = (i32::from(slice_nr) - 1) * self.mb_width - 1;
+
+        let mut stream: MyBitReader<T> = bitstream_io::BitReader::new(f);
+        let quantizer_scale: u8 = stream.read::<u8>(5).unwrap();
+        println!("quantizer_scale={}", quantizer_scale);
+
+        // Extra slice info
+        loop {
+            if stream.read::<u8>(1).unwrap() == 0b1 {
+                println!("extra slice info");
+                stream.read::<u8>(8).unwrap();
+            } else {
+                break;
+            }
+        }
+
+        loop {
+
+            self.parse_macroblock(&mut stream, slice_nr);
+
+            if self.mb_addr >= self.mb_size - 1 {
+                println!("mb_addr >= mb_size - 1");
+                break;
+            }
+
+            let next_bits = stream.read::<u32>(23)?;
+            stream.seek_bits(SeekFrom::Current(-23))?;
+
+            if next_bits == 0 {
+                println!("next_bits == 0");
+                break;
+            }
+        }
+
+        println!("byte_aligned={}", stream.byte_aligned());
+        let pre = f.stream_position().unwrap();
+        advance_to_next_start_code(f);
+        let post = f.stream_position().unwrap();
+        println!("advance: {} {}", pre, post);
+
+        Ok(())
     }
 
     fn parse_macroblock<T: Read+Seek>(&mut self, bs: &mut MyBitReader<T>, slice: u8) -> Option<()> {
@@ -663,9 +730,11 @@ impl Slice {
 
         self.mb_addr += i32::from(addr_inc);
         self.mb_row   = self.mb_addr / self.mb_width;
-        self.mb_col   = self.mb_addr & self.mb_width;
+        self.mb_col   = self.mb_addr % self.mb_width;
 
-        println!("parse_macroblock: addr_inc={}, type={}", addr_inc, macro_type);
+
+        println!("mb_addr={}, mb_row={}, mb_col={}, addr_inc={}, type={}, slice_nr={}",
+                 self.mb_addr, self.mb_row, self.mb_col, addr_inc, macro_type, slice);
 
         let mut quantizer_scale = 1;
         if (macro_type & 0b1_0000) == 1 {
@@ -675,10 +744,9 @@ impl Slice {
 
         // Ignore motion vectors and block patterns since they are irrelevant for I-frames.
 
-        let mut frame = Frame::new(640, 480);
+        let mut frame = Frame::new(self.width, self.height);
 
         for i in 0 .. 6 {
-            println!("block_index={}", i);
 
             let mut block_data = [0i32; 64];
 
@@ -689,32 +757,48 @@ impl Slice {
             };
 
             let size_lum: u8 = parse_dct_dc_size(&table, bs).unwrap();
-            println!("size_{{lum|chrom}}={}", size_lum);
+            println!("block={}, dct_size={}", i, size_lum);
 
             if size_lum > 0 {
                 let dc_diff_coded = bs.read::<u8>(size_lum.into()).unwrap();
+                println!("block={}, dct_diff={}", i, dc_diff_coded);
                 let dc_diff: i16 = {
                     if dc_diff_coded & (1 << (size_lum - 1)) != 0 {
                         dc_diff_coded.into()
                     } else {
                         (-1i16 << size_lum)|i16::from(dc_diff_coded+1)
                     }};
-                println!("dc_diff_coded={}, dc_diff={}", dc_diff_coded, dc_diff);
+                // println!("dc_diff_coded={}, dc_diff={}", dc_diff_coded, dc_diff);
             }
-            let mut n = 0;
+
+            assert!((macro_type & 0b1_0000) != 0);
+            // For n = 1 to be valid, must be an I-frame.
+            let mut n = 1;
+
+            print!("coeff= ");
 
             loop {
                 let mut level = 0i32;
                 let mut run = 0u8;
 
+                let pre = bs.position_in_bits().unwrap();
                 let coeff = read_huffman(&VIDEO_DCT_COEFF, bs).unwrap();
 
                 if (coeff == 0x0001) && (n > 0) && (bs.read::<u8>(1).unwrap() == 0) {
+                    print!("{}", coeff);
                     break;
                 }
 
                 if coeff == 0xffff {
-                    unimplemented!();
+                    run = bs.read::<u8>(6).unwrap();
+                    level = i32::from(bs.read::<u8>(8).unwrap());
+                    if level == 0 {
+                        level = i32::from(bs.read::<u8>(8).unwrap());
+                    } else if level == 128 {
+                        level = i32::from(bs.read::<u8>(8).unwrap()) - 256;
+                    } else if level > 128 {
+                        level -= 256;
+                    }
                 } else {
                     run = (coeff >> 8).try_into().unwrap();
                     level = (coeff & 0xff).try_into().unwrap();
@@ -724,9 +808,12 @@ impl Slice {
                     }
                 }
 
+                let post = bs.position_in_bits().unwrap();
+                print!("{} ({},{}) {} {} ", coeff, run, level, pre, post);
+
                 n += run;
 
-                if n < 0 || n > 64 {
+                if n < 0 || n >= 64 {
                     panic!();
                 }
 
@@ -755,6 +842,13 @@ impl Slice {
                 block_data[usize::from(de_zig_zagged)] = level * VIDEO_PREMULTIPLIER_MATRIX[usize::from(de_zig_zagged)];
 
             }
+
+            println!("");
+
+            // for i in 0..64 {
+            //     print!("{} ", block_data[i]);
+            // }
+            // println!("");
 
             let mut d = match i {
                 4 => &mut frame.cb.data,
@@ -802,69 +896,101 @@ impl Slice {
     }
 }
 
-// Why need a bufread and not just some trait(s) as first param?
-fn parse_slice<T: std::io::Read>(f: &mut std::io::BufReader<T>) -> Result<Slice, std::io::Error>  {
+/**
+ * Advances stream position to next start code.
+ */
+fn advance_to_next_start_code<F: Read + Seek>(f: &mut BufReader<F>) -> io::Result<()> {
 
-    let mut buf: [u8; 4] = [0; 4];
-    f.read_exact(&mut buf)?;
-
-    if !is_slice_start_code(&buf) {
-        panic!("");
-    }
-
-    let mut stream: bitstream_io::BitReader<_, bitstream_io::BigEndian> = bitstream_io::BitReader::new(f);
-    let other_scale: u8 = stream.read::<u8>(5).unwrap();
-    println!("{}", other_scale);
-
-    // Extra slice info
     loop {
-        if stream.read::<u8>(1).unwrap() == 0b1 {
-            println!("extra slice info");
-            stream.read::<u8>(8).unwrap();
+        let mut b = [0; 4];
+        f.read_exact(&mut b)?;
+
+        if is_video_layer_start_code(&b) {
+            f.seek_relative(-4)?;
+            return Ok(());
         } else {
-            break;
+            f.seek_relative(-3)?;
         }
     }
-
-    let mut slice = Slice::new();
-
-    loop {
-
-        slice.parse_macroblock(&mut stream);
-
-        let next_bits = stream.read::<u32>(23)?;
-
-        if next_bits == 0 {
-            break;
-        }
-    }
-
-    // next_start_code();
-
-    Ok(Slice::new())
 }
 
-fn parse_picture<T: std::io::Read + std::io::Seek>(f: &mut std::io::BufReader<T>) -> io::Result<()> {
+fn parse_picture<T: Read + Seek>(f: &mut std::io::BufReader<T>, seqhdr: &SequenceHeader) -> io::Result<()> {
     let mut buf: [u8; 4] = [0; 4];
 
     f.read_exact(&mut buf)?;
-    assert!(buf == PICTURE_START_CODE);
+    assert!(is_start_code(&buf, PICTURE_START_VALUE));
+
+    println!("Picture start code at offset {}.",
+             f.seek(SeekFrom::Current(0)).unwrap() - 4);
 
     let hdr = PictureHeader::new(f).unwrap();
     println!("seq nr: {}, frame type: {}", hdr.sequence_nr(), hdr.frame_type());
 
-    loop {
-        parse_slice(f).unwrap();
+    if hdr.frame_type() != FRAME_TYPE_I {
 
-        f.read_exact(&mut buf)?;
+        let frame_type = if hdr.frame_type() == FRAME_TYPE_I {
+            "I-frame" } else { "non-I-frame" };
+        println!("Skipping {} @ offset {}", frame_type, f.stream_position().unwrap());
 
-        if !is_slice_start_code(&buf) {
-            f.seek_relative(-4)?;
-            break;
+        loop {
+            let start_code = next_start_code(f)?;
+            if start_code == GROUP_OF_PICTURES_START_VALUE ||
+                start_code == SEQUENCE_HEADER_START_VALUE ||
+                start_code == 0 {
+                    return Ok(());
+                }
+            f.seek_relative(4)?;
         }
     }
 
-    Ok(())
+    // Skip extensions and user data
+    let mut start_code = next_start_code(f)?;
+    loop {
+        if !(start_code == START_EXTENSION ||
+             start_code == START_USER_DATA) {
+            assert!(start_code >= 0x01 && start_code <= 0xAF);
+            // f.seek_relative(-4);
+            break;
+        }
+        start_code = next_start_code(f)?;
+    }
+
+    let mut container = Container::new(seqhdr.hsize(), seqhdr.vsize());
+
+    loop {
+        container.parse_slice(f, start_code).unwrap();
+
+        f.read_exact(&mut buf)?;
+        f.seek_relative(-4)?;
+
+        if !is_slice_start_code(&buf) {
+            break;
+        }
+        start_code = buf[3];
+    }
+
+    return Ok(());
+}
+
+// MyBitReader<'a, T: std::io::Read> = bitstream_io::BitReader<&'a mut std::io::BufReader<T>, bitstream_io::BigEndian>;
+
+/**
+ * Positions the stream before the start code, i.e., reading next 4
+ * byte, will result in the same start code sequence: 0x00, 0x00, 0x01, 0x??.
+ */
+fn next_start_code<T: Read+Seek>(r: &mut std::io::BufReader<T>) -> io::Result<u8> {
+
+    loop {
+        let mut b = [0; 4];
+        r.read_exact(&mut b)?;
+
+        if b[0] == 0 && b[1] == 0 && b[2] == 1 {
+            r.seek_relative(-4)?;
+            return Ok(b[3]);
+        } else {
+            r.seek_relative(-3)?;
+        }
+    }
 }
 
 pub fn parse_mpeg(path: &str) -> io::Result<()> {
@@ -876,41 +1002,51 @@ pub fn parse_mpeg(path: &str) -> io::Result<()> {
 
     let mut buf: [u8; 4] = [0; 4];
 
-    let mut frame: Frame;
+    let mut seqhdr: Option<SequenceHeader> = None;
 
     loop {
 
         reader.read_exact(&mut buf)?;
 
-        match buf {
-            SEQUENCE_HEADER => {
-                let seqhdr = SequenceHeader::new(&mut reader);
-                println!("width: {}", seqhdr.hsize());
-                println!("height: {}", seqhdr.vsize());
-                println!("aspect ratio: {}", seqhdr.aspect_ratio_str());
-                println!("frame rate: {}", seqhdr.frame_rate());
-            },
-            GROUP_OF_PICTURES_START_CODE => {
+        if is_start_code(&buf, SEQUENCE_HEADER_START_VALUE) {
+
+                println!("Sequence start code at offset {}.",
+                         reader.seek(SeekFrom::Current(0)).unwrap() - 4);
+
+                seqhdr = Some(SequenceHeader::new(&mut reader));
+
+                println!("width: {}", seqhdr.as_ref().unwrap().hsize());
+                println!("height: {}", seqhdr.as_ref().unwrap().vsize());
+                println!("aspect ratio: {}", seqhdr.as_ref().unwrap().aspect_ratio_str());
+                println!("frame rate: {}", seqhdr.as_ref().unwrap().frame_rate());
+
+        } else if is_start_code(&buf, GROUP_OF_PICTURES_START_VALUE) {
+
+                println!("Group of Pictures start code at offset {}.",
+                         reader.seek(SeekFrom::Current(0)).unwrap() - 4);
+
+                let mut count = 0;
                 let hdr = GroupOfPictures::new(&mut reader).unwrap();
+
                 println!("hour: {} minute: {} sec: {} frame: {}", hdr.hour(), hdr.min(), hdr.sec(), hdr.frame());
+
                 loop {
-                    parse_picture(&mut reader);
+                    count += 1;
+
+                    parse_picture(&mut reader, &seqhdr.as_ref().unwrap());
 
                     reader.read_exact(&mut buf)?;
+                    reader.seek_relative(-4)?;
 
-                    if buf != PICTURE_START_CODE {
-                        reader.seek_relative(-4)?;
+                    if is_start_code(&buf, PICTURE_START_VALUE) {
                         break;
                     }
                 }
-            },
-            _ => {
-                reader.seek_relative(-3)?;
-            }
-        };
-    };
-
-    Ok(())
+                println!("{} pictures in group.", count);
+        } else {
+            reader.seek_relative(-3)?;
+        }
+    }
 }
 
 // The IDCT code is a manual translation of the C [1, 2] code to Rust.
