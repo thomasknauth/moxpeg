@@ -11,7 +11,7 @@
 
 use bitstream_io::BitRead;
 use std::io;
-use std::io::{BufReader, Seek, Read, SeekFrom};
+use std::io::{BufReader, BufWriter, Seek, Read, SeekFrom};
 use std::io::Write;
 use std::fmt::Write as FmtWrite;
 use std::fs::File;
@@ -593,6 +593,63 @@ impl Frame {
                            macroblock_height * 8)
         }
     }
+
+    fn put_pixel(&mut self, dest: &mut Vec<u8>, d_index: i32, y_index: i32, r: i32, g: i32, b: i32, y_offset: i32, dest_offset: i32) {
+        let RI = 0;
+        let GI = 1;
+        let BI = 2;
+        let idx: usize = (i32::from(y_index) + y_offset).try_into().unwrap();
+	      let y: i32 = ((i32::from(self.y.data[idx])-16) * 76309) >> 16;
+	      dest[usize::try_from(d_index + dest_offset + RI).unwrap()] = clamp(y + r);
+	      dest[usize::try_from(d_index + dest_offset + GI).unwrap()] = clamp(y - g);
+	      dest[usize::try_from(d_index + dest_offset + BI).unwrap()] = clamp(y + b);
+
+        print!("{} {} {} {}, ", usize::try_from(d_index + dest_offset + RI).unwrap(),
+               dest[usize::try_from(d_index + dest_offset + RI).unwrap()],
+               dest[usize::try_from(d_index + dest_offset + GI).unwrap()],
+               dest[usize::try_from(d_index + dest_offset + BI).unwrap()]);
+    }
+
+    // Convert a frame from YCrCb to RGB.
+    // Modeled after PLM_DEFINE_FRAME_CONVERT_FUNCTION from pl_mpeg.
+    fn to_rgb(&mut self) -> Vec<u8> {
+
+        let bytes_per_pixel = 3i32;
+        let mut dest = vec![0; usize::try_from(i32::from(self.width) * i32::from(self.height) * bytes_per_pixel).unwrap()];
+        let stride: i32 = i32::from(self.width) * bytes_per_pixel;
+        // For some reason, we half the width and height here. The
+        // innermost loop sets 4 pixels at a time, compensating for
+        // halving the width and height.
+		    let cols: i32 = (self.width >> 1).into();
+		    let rows: i32 = (self.height >> 1).into();
+		    let yw: i32 = i32::from(self.y.width);
+		    let cw: i32 = i32::from(self.cb.width);
+
+        for row in 0..rows {
+		        let mut c_index: i32 = row * cw;
+		        let mut y_index: i32 = row * 2 * yw;
+		        let mut d_index: i32 = (row * 2 * stride).into();
+
+            for col in 0..cols {
+
+				        let cr: i32 = i32::from(self.cr.data[usize::try_from(c_index).unwrap()]) - 128;
+				        let cb: i32 = i32::from(self.cb.data[usize::try_from(c_index).unwrap()]) - 128;
+				        let r: i32 = (cr * 104597) >> 16;
+				        let g: i32 = (cb * 25674 + cr * 53278) >> 16;
+				        let b: i32 = (cb * 132201) >> 16;
+				        self.put_pixel(&mut dest, d_index, y_index, r, g, b, 0, 0);
+				        self.put_pixel(&mut dest, d_index, y_index, r, g, b, 1, bytes_per_pixel.into());
+				        self.put_pixel(&mut dest, d_index, y_index, r, g, b, yw.into(), stride.into());
+				        self.put_pixel(&mut dest, d_index, y_index, r, g, b, (yw + 1).into(),
+                               (stride + bytes_per_pixel).into());
+                println!("");
+		            c_index += 1;
+		            y_index += 2;
+		            d_index += i32::from(2 * bytes_per_pixel);
+            }
+        }
+        dest
+    }
 }
 
 // #define PLM_BLOCK_SET(DEST, DEST_INDEX, DEST_WIDTH, SOURCE_INDEX, SOURCE_WIDTH, BLOCK_SIZE, OP) do { \
@@ -606,12 +663,15 @@ fn block_set(dest: &mut Vec<u8>,
                     block_size: usize,
                     op: &[u8; 64])
 {
+    trace!("block_set={} {} {} {}", dest_idx, dest_width, source_idx, source_width);
+
 	  let mut dest_scan = dest_width - block_size;
 	  let mut source_scan = source_width - block_size;
     let mut source_idx = 0;
 
 	  for y in 0..block_size {
 		    for x in 0..block_size {
+            print!("{}={} ", dest_idx, op[source_idx]);
 			      dest[dest_idx] = op[source_idx];
 			      source_idx += 1;
             dest_idx += 1;
@@ -619,6 +679,7 @@ fn block_set(dest: &mut Vec<u8>,
 		    source_idx += source_scan;
 		    dest_idx += dest_scan;
     }
+    println!("");
 }
 
 struct Container {
@@ -631,7 +692,8 @@ struct Container {
     width: u16,
     height: u16,
     quantizer_scale: u8,
-    dc_predictor: [i32; 3]
+    dc_predictor: [i32; 3],
+    frame: Frame
 }
 
 #[inline(always)]
@@ -648,7 +710,7 @@ fn decode_dc_diff(coded: u8, size: u8) -> i16 {
     if coded & (1 << (size - 1)) != 0 {
         return coded.into();
     } else {
-        return (-1i16 << size)|i16::from(coded+1)
+        return (-(1i16 << size))|i16::from(coded+1)
     }
 }
 
@@ -669,7 +731,8 @@ impl Container {
             width: width,
             height: height,
             quantizer_scale: 0,
-            dc_predictor: [128; 3]
+            dc_predictor: [128; 3],
+            frame: Frame::new(width, height)
         }
     }
 
@@ -680,6 +743,8 @@ impl Container {
                  f.seek(SeekFrom::Current(0)).unwrap() - 4, slice_nr);
 
         f.seek(SeekFrom::Current(4)).is_ok();
+
+        self.dc_predictor = [128; 3];
 
         self.mb_addr = (i32::from(slice_nr) - 1) * self.mb_width - 1;
 
@@ -757,8 +822,6 @@ impl Container {
 
         // Ignore motion vectors and block patterns since they are irrelevant for I-frames.
 
-        let mut frame = Frame::new(self.width, self.height);
-
         for i in 0 .. 6 {
 
             let mut block_data = [0i32; 64];
@@ -771,13 +834,14 @@ impl Container {
                 VIDEO_DCT_SIZE_CHROMINANCE
             };
 
-            let size_lum: u8 = parse_dct_dc_size(&table, bs).unwrap();
-            trace!("block={}, dct_size={}, predictor={}", i, size_lum, predictor);
+            let dct_size: u8 = parse_dct_dc_size(&table, bs).unwrap();
+            trace!("block={}, dct_size={}, predictor={}", i, dct_size, predictor);
 
-            if size_lum > 0 {
-                let dc_diff_coded = bs.read::<u8>(size_lum.into()).unwrap();
-                trace!("block={}, dct_diff={}", i, dc_diff_coded);
-                block_data[0] = predictor + i32::from(decode_dc_diff(dc_diff_coded, size_lum));
+            if dct_size > 0 {
+                let dc_diff_coded = bs.read::<u8>(dct_size.into()).unwrap();
+                let dc_diff_decoded = decode_dc_diff(dc_diff_coded, dct_size);
+                trace!("block={}, dct_diff={}, decoded_diff={}", i, dc_diff_coded, dc_diff_decoded);
+                block_data[0] = predictor + i32::from(dc_diff_decoded);
             } else {
                 block_data[0] = predictor;
             }
@@ -868,23 +932,23 @@ impl Container {
             trace!("{}", block_str);
 
             let mut d = match i {
-                4 => &mut frame.cb.data,
-                5 => &mut frame.cr.data,
-                _ => &mut frame.y.data
+                4 => &mut self.frame.cb.data,
+                5 => &mut self.frame.cr.data,
+                _ => &mut self.frame.y.data
             };
-            let dw = if i < 4 { frame.y.width } else { frame.cr.width };
+            let dw = if i < 4 { self.frame.y.width } else { self.frame.cr.width };
 
             let mut di = 0;
             if i < 4 {
-                di = (self.mb_row * i32::from(frame.y.width) + self.mb_col) << 4;
+                di = (self.mb_row * i32::from(self.frame.y.width) + self.mb_col) << 4;
                 if (i & 1) != 0 {
                     di += 8;
                 }
                 if (i & 2) != 0 {
-                    di += i32::from(frame.y.width << 3);
+                    di += i32::from(self.frame.y.width << 3);
                 }
             } else {
-                di = ((self.mb_row * i32::from(frame.y.width)) << 2) + (self.mb_col << 3);
+                di = ((self.mb_row * i32::from(self.frame.y.width)) << 2) + (self.mb_col << 3);
             }
 
             if macro_type & 0b1_0000 != 0 {
@@ -986,7 +1050,48 @@ fn parse_picture<T: Read + Seek>(f: &mut std::io::BufReader<T>, seqhdr: &Sequenc
         start_code = buf[3];
     }
 
+    trace!("frame.y={:x?}", &container.frame.y.data[0..16]);
+    trace!("frame.y={:x?}", &container.frame.y.data[container.frame.y.data.len()-32..]);
+    trace!("frame.cr={:x?}", &container.frame.cr.data[0..16]);
+    trace!("frame.cb={:x?}", &container.frame.cb.data[0..16]);
+
+    let pic = container.frame.to_rgb();
+    write_ppm(container.width.into(), container.height.into(), &pic).is_ok();
     return Ok(());
+}
+
+static mut pic_count: i32 = 0;
+
+/**
+ * @param b: buffer with RGB pixel values
+ */
+fn write_ppm(width: i32, height: i32, b: &Vec<u8>) -> io::Result<()> {
+
+    let mut s: String = "".to_string();
+    for val in b.iter() {
+        write!(s, "{} ", val);
+    }
+    trace!("pixel_data={}", s);
+
+    let mut fname: String = "my".to_string();
+    write!(fname, "{}.ppm", unsafe { pic_count += 1; pic_count });
+
+    let f = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .open(fname)?;
+    let mut writer = io::BufWriter::new(f);
+    write!(writer, "P3\n");
+    write!(writer, "{} {}\n", width, height);
+    write!(writer, "255\n");
+    for row in 0..height {
+        for col in 0..width {
+            let idx = usize::try_from(((row * width) + col) * 3).unwrap();
+            write!(writer, "{} {} {} ", b[idx], b[idx+1], b[idx+2]);
+        }
+        write!(writer, "\n");
+    }
+    Ok(())
 }
 
 // MyBitReader<'a, T: std::io::Read> = bitstream_io::BitReader<&'a mut std::io::BufReader<T>, bitstream_io::BigEndian>;
@@ -1279,8 +1384,9 @@ mod tests {
 
     #[test]
     fn it_works() {
-        parse_mpeg("/Users/thomas/code/mpeg/big-buck-bunny.mpg");
-        // parse_mpeg("/Users/thomas/code/mpeg/bjork-all-is-full-of-love.mpg");
+        // parse_mpeg("/Users/thomas/code/mpeg/big-buck-bunny.mpg");
+        // parse_mpeg("/Users/thomas/code/mpeg/bjork-all-is-full-of-love-v2.mpg");
+        parse_mpeg("/Users/thomas/code/mpeg/bjork-v2-short-2.mpg");
     }
 
     #[test]
@@ -1374,7 +1480,10 @@ mod tests {
     fn test_parse_slice() {
         let f = std::fs::File::open("test/one-slice").unwrap();
         let mut reader = io::BufReader::new(f);
-        parse_slice(&mut reader).unwrap();
+        let mut c = Container::new();
+        let mut buf: [u8; 4] = [0; 4];
+        reader.read_exact(&mut buf);
+        c.parse_slice(&mut reader, buf[3]).unwrap();
     }
 
     #[test]
@@ -1386,5 +1495,15 @@ mod tests {
         assert_eq!(parse_dct_dc_size(&VIDEO_DCT_SIZE_LUMINANCE, &mut stream).unwrap(), 4);
         assert_eq!(parse_dct_dc_size(&VIDEO_DCT_SIZE_LUMINANCE, &mut stream).unwrap(), 0);
         assert_eq!(parse_dct_dc_size(&VIDEO_DCT_SIZE_LUMINANCE, &mut stream).unwrap(), 1);
+    }
+
+    #[test]
+    fn test_iso11172_stream() {
+        let mut f = OpenOptions::new()
+            .read(true)
+            .open("/Users/thomas/code/mpeg/bjork-v2-short-2.mpg").expect("Unable to open file");
+        let mut reader = io::BufReader::new(f);
+
+        iso11172_stream(&mut reader);
     }
 }
