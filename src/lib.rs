@@ -73,7 +73,7 @@ impl SequenceHeader {
     }
 
     fn hsize(&self) -> u16 {
-         (self.raw[0] as u16) << 4 + ((self.raw[1] & 0xF0) >> 4)
+         (u16::from(self.raw[0]) << 4) + (u16::from(self.raw[1] & 0xF0) >> 4)
     }
     fn vsize(&self) -> u16 {
         (((self.raw[1] & 0x0F) as u16) << 8) + self.raw[2] as u16
