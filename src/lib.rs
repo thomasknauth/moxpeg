@@ -740,7 +740,7 @@ impl Container {
     where T: std::io::Read + std::io::Seek
     {
         println!("Slice start code at stream offset 0x{:x} bytes. slice_nr={}.",
-                 f.seek(SeekFrom::Current(0)).unwrap() - 4, slice_nr);
+                 f.stream_position().unwrap() - 4, slice_nr);
 
         f.seek(SeekFrom::Current(4)).is_ok();
 
@@ -1002,7 +1002,7 @@ fn parse_picture<T: Read + Seek>(f: &mut std::io::BufReader<T>, seqhdr: &Sequenc
     assert!(is_start_code(&buf, PICTURE_START_VALUE));
 
     println!("Picture start code at offset {}.",
-             f.seek(SeekFrom::Current(0)).unwrap() - 4);
+             f.stream_position().unwrap() - 4);
 
     let hdr = PictureHeader::new(f).unwrap();
     println!("seq nr: {}, frame type: {}", hdr.sequence_nr(), hdr.frame_type());
@@ -1133,7 +1133,7 @@ pub fn parse_mpeg(path: &str) -> io::Result<()> {
         if is_start_code(&buf, SEQUENCE_HEADER_START_VALUE) {
 
                 println!("Sequence start code at offset {}.",
-                         reader.seek(SeekFrom::Current(0)).unwrap() - 4);
+                         reader.stream_position().unwrap() - 4);
 
                 seqhdr = Some(SequenceHeader::new(&mut reader));
 
@@ -1145,7 +1145,7 @@ pub fn parse_mpeg(path: &str) -> io::Result<()> {
         } else if is_start_code(&buf, GROUP_OF_PICTURES_START_VALUE) {
 
                 println!("Group of Pictures start code at offset {}.",
-                         reader.seek(SeekFrom::Current(0)).unwrap() - 4);
+                         reader.stream_position().unwrap() - 4);
 
                 let mut count = 0;
                 let hdr = GroupOfPictures::new(&mut reader).unwrap();
