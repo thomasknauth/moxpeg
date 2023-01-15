@@ -9,6 +9,8 @@
 
 // https://github.com/phoboslab/pl_mpeg
 
+mod stream;
+
 use bitstream_io::BitRead;
 use std::io;
 use std::io::{BufReader, BufWriter, Seek, Read, SeekFrom};
@@ -16,6 +18,7 @@ use std::io::Write;
 use std::fmt::Write as FmtWrite;
 use std::fs::File;
 use std::fs::OpenOptions;
+use stream::MpegVideoStream;
 
 extern crate log;
 use log::{trace};
