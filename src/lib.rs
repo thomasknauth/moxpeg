@@ -518,7 +518,7 @@ impl Packet {
     }
 }
 
-fn parse_pack<F: Read+Seek>(f: &mut F, fout: &mut File) -> io::Result<()> {
+fn parse_pack<F: Read+Seek>(f: &mut F, data: &mut Vec<u8>) -> io::Result<()> {
     let pack = Pack::parse(f)?;
 
     let mut buf = [0; 4];
@@ -542,25 +542,24 @@ fn parse_pack<F: Read+Seek>(f: &mut F, fout: &mut File) -> io::Result<()> {
 
         if buf[3] == VIDEO_STREAM_0_START_CODE {
 
-            fout.write_all(&packet.data)?;
+            data.extend_from_slice(&packet.data);
         }
     }
 
     Ok(())
 }
 
-pub fn iso11172_stream<F: Read+Seek>(f: &mut F, fout: &mut File) -> io::Result<()> {
-
+/// Read pack payloads an iso11172 stream into `data`..
+pub fn iso11172_stream<F: Read+Seek>(f: &mut F, data: &mut Vec<u8>) -> io::Result<()> {
     loop {
-
         let mut buf = [0; 4];
         f.read_exact(&mut buf)?;
 
-        if !is_start_code(&buf, 0xBA) {
-            return Ok(());
+        if !is_start_code(&buf, PACK_START_CODE) {
+            assert!(false);
         }
 
-        parse_pack(f, fout)?;
+        parse_pack(f, data)?;
     }
 }
 
@@ -1117,10 +1116,11 @@ fn next_start_code<T: Read+Seek>(r: &mut std::io::BufReader<T>) -> io::Result<u8
 
 pub fn parse_mpeg(path: &str) -> io::Result<()> {
 
-    let f = OpenOptions::new()
+    let mut f = OpenOptions::new()
         .read(true)
         .open(path).expect("Unable to open file");
-    let mut reader = io::BufReader::new(f);
+    let mut vidstream = MpegVideoStream::new(&mut f);
+    let mut reader = io::BufReader::new(&mut vidstream);
 
     let mut buf: [u8; 4] = [0; 4];
 
