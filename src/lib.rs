@@ -479,13 +479,13 @@ impl Packet {
     fn parse<F: Read+Seek>(f: &mut F, stream_id: u8) -> io::Result<Self> {
 
         let offset = f.stream_position().unwrap();
-        println!("stream id=0x{:x} at offset {}(0x{:x})", stream_id, offset, offset);
+        trace!("stream id=0x{:x} at offset {}(0x{:x})", stream_id, offset, offset);
 
         let mut packet_len_buf = [0; 2];
         f.read_exact(&mut packet_len_buf)?;
         let packet_len = u16::from_be_bytes(packet_len_buf);
 
-        println!("packet len={}", packet_len);
+        trace!("packet len={}", packet_len);
 
         let mut data = vec![0; packet_len.into()];
 
@@ -515,7 +515,7 @@ impl Packet {
             idx += 1;
         }
 
-        println!("packet header len={}", idx);
+        trace!("packet header len={}", idx);
 
         Ok(Packet {data: data[idx..].to_vec()})
     }
@@ -606,10 +606,10 @@ impl Frame {
 	      dest[usize::try_from(d_index + dest_offset + GI).unwrap()] = clamp(y - g);
 	      dest[usize::try_from(d_index + dest_offset + BI).unwrap()] = clamp(y + b);
 
-        print!("{} {} {} {}, ", usize::try_from(d_index + dest_offset + RI).unwrap(),
-               dest[usize::try_from(d_index + dest_offset + RI).unwrap()],
-               dest[usize::try_from(d_index + dest_offset + GI).unwrap()],
-               dest[usize::try_from(d_index + dest_offset + BI).unwrap()]);
+        // print!("{} {} {} {}, ", usize::try_from(d_index + dest_offset + RI).unwrap(),
+        //        dest[usize::try_from(d_index + dest_offset + RI).unwrap()],
+        //        dest[usize::try_from(d_index + dest_offset + GI).unwrap()],
+        //        dest[usize::try_from(d_index + dest_offset + BI).unwrap()]);
     }
 
     // Convert a frame from YCrCb to RGB.
@@ -644,7 +644,7 @@ impl Frame {
 				        self.put_pixel(&mut dest, d_index, y_index, r, g, b, yw.into(), stride.into());
 				        self.put_pixel(&mut dest, d_index, y_index, r, g, b, (yw + 1).into(),
                                (stride + bytes_per_pixel).into());
-                println!("");
+                // println!("");
 		            c_index += 1;
 		            y_index += 2;
 		            d_index += i32::from(2 * bytes_per_pixel);
@@ -673,7 +673,7 @@ fn block_set(dest: &mut Vec<u8>,
 
 	  for y in 0..block_size {
 		    for x in 0..block_size {
-            print!("{}={} ", dest_idx, op[source_idx]);
+            // print!("{}={} ", dest_idx, op[source_idx]);
 			      dest[dest_idx] = op[source_idx];
 			      source_idx += 1;
             dest_idx += 1;
@@ -681,7 +681,7 @@ fn block_set(dest: &mut Vec<u8>,
 		    source_idx += source_scan;
 		    dest_idx += dest_scan;
     }
-    println!("");
+    // println!("");
 }
 
 struct Container {
@@ -741,7 +741,7 @@ impl Container {
     fn parse_slice<T>(&mut self, f: &mut std::io::BufReader<T>, slice_nr: u8) -> io::Result<()>
     where T: std::io::Read + std::io::Seek
     {
-        println!("Slice start code at stream offset 0x{:x} bytes. slice_nr={}.",
+        trace!("Slice start code at stream offset 0x{:x} bytes. slice_nr={}.",
                  f.stream_position().unwrap() - 4, slice_nr);
 
         f.seek(SeekFrom::Current(4)).is_ok();
@@ -769,7 +769,7 @@ impl Container {
             self.parse_macroblock(&mut stream, slice_nr);
 
             if self.mb_addr >= self.mb_size - 1 {
-                println!("mb_addr >= mb_size - 1");
+                trace!("mb_addr >= mb_size - 1");
                 break;
             }
 
@@ -777,16 +777,16 @@ impl Container {
             stream.seek_bits(SeekFrom::Current(-23))?;
 
             if next_bits == 0 {
-                println!("next_bits == 0");
+                trace!("next_bits == 0");
                 break;
             }
         }
 
-        println!("byte_aligned={}", stream.byte_aligned());
+        trace!("byte_aligned={}", stream.byte_aligned());
         let pre = f.stream_position().unwrap();
         advance_to_next_start_code(f);
         let post = f.stream_position().unwrap();
-        println!("advance: {} {}", pre, post);
+        // println!("advance: {} {}", pre, post);
 
         Ok(())
     }
@@ -794,7 +794,7 @@ impl Container {
     fn parse_macroblock<T: Read+Seek>(&mut self, bs: &mut MyBitReader<T>, slice: u8) -> Option<()> {
 
         let mut addr_inc = read_huffman(&VIDEO_MACROBLOCK_ADDRESS_INCREMENT, bs).unwrap();
-        // println!("addr_inc={}", addr_inc);
+        trace!("addr_inc={}", addr_inc);
 
         while addr_inc == 34 {
             addr_inc = read_huffman(&VIDEO_MACROBLOCK_ADDRESS_INCREMENT, bs).unwrap();
