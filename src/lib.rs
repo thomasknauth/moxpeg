@@ -1163,7 +1163,7 @@ pub fn parse_mpeg(path: &str) -> io::Result<()> {
                     reader.read_exact(&mut buf)?;
                     reader.seek_relative(-4)?;
 
-                    if is_start_code(&buf, PICTURE_START_VALUE) {
+                    if !is_start_code(&buf, PICTURE_START_VALUE) {
                         break;
                     }
                 }
