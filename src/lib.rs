@@ -990,7 +990,7 @@ fn advance_to_next_start_code<F: Read + Seek>(f: &mut BufReader<F>) -> io::Resul
     }
 }
 
-fn parse_picture<T: Read + Seek>(f: &mut std::io::BufReader<T>, seqhdr: &SequenceHeader) -> io::Result<()> {
+fn parse_picture<T: Read + Seek>(f: &mut std::io::BufReader<T>, seqhdr: &SequenceHeader) -> io::Result<Frame> {
     let mut buf: [u8; 4] = [0; 4];
 
     f.read_exact(&mut buf)?;
@@ -1013,7 +1013,7 @@ fn parse_picture<T: Read + Seek>(f: &mut std::io::BufReader<T>, seqhdr: &Sequenc
             if start_code == GROUP_OF_PICTURES_START_VALUE ||
                 start_code == SEQUENCE_HEADER_START_VALUE ||
                 start_code == 0 {
-                    return Ok(());
+                    return Err(std::io::Error::new(std::io::ErrorKind::Other, "oh no!"));
                 }
             f.seek_relative(4)?;
         }
@@ -1051,36 +1051,36 @@ fn parse_picture<T: Read + Seek>(f: &mut std::io::BufReader<T>, seqhdr: &Sequenc
     trace!("frame.cb={:x?}", &container.frame.cb.data[0..16]);
 
     let pic = container.frame.to_rgb();
-    write_ppm(container.width.into(), container.height.into(), &pic).is_ok();
-    return Ok(());
-}
 
-static mut pic_count: i32 = 0;
+    return Ok(container.frame);
+}
 
 /**
  * @param b: buffer with RGB pixel values
  */
-fn write_ppm(width: i32, height: i32, b: &Vec<u8>) -> io::Result<()> {
+fn write_ppm<W: Write>(frame: &Frame, writer: &mut W) -> io::Result<()> {
 
 
-    let mut fname: String = "my".to_string();
-    write!(fname, "{}.ppm", unsafe { pic_count += 1; pic_count });
-
-    let f = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .open(fname)?;
-    let mut writer = io::BufWriter::new(f);
     write!(writer, "P3\n");
-    write!(writer, "{} {}\n", width, height);
+    write!(writer, "{} {}\n", frame.width, frame.height);
     write!(writer, "255\n");
-    for row in 0..height {
-        for col in 0..width {
-            let idx = usize::try_from(((row * width) + col) * 3).unwrap();
+
+    let b = frame.to_rgb();
+
+    for row in 0..frame.height {
+
+        // let slice_start = usize::try_from(row * width * 3).unwrap();
+        // let slice_end   = usize::try_from((row+1) * width * 3).unwrap();
+        // let slice = &b[slice_start..slice_end];
+        // let s = slice.iter().map(|val| format!("{}", val)).collect::<Vec<String>>().join(" ");
+
+        for col in 0..frame.width {
+            let idx = usize::try_from(((row * frame.width) + col) * 3).unwrap();
             write!(writer, "{} {} {} ", b[idx], b[idx+1], b[idx+2]);
         }
         write!(writer, "\n");
     }
+
     Ok(())
 }
 
@@ -1117,6 +1117,8 @@ pub fn parse_mpeg(path: &str) -> io::Result<()> {
 
     let mut seqhdr: Option<SequenceHeader> = None;
 
+    let mut nr_iframes = 0;
+
     loop {
 
         reader.read_exact(&mut buf)?;
@@ -1146,7 +1148,28 @@ pub fn parse_mpeg(path: &str) -> io::Result<()> {
                 loop {
                     count += 1;
 
-                    parse_picture(&mut reader, &seqhdr.as_ref().unwrap());
+
+                    match parse_picture(&mut reader, &seqhdr.as_ref().unwrap()) {
+                        Err(e) => match e.kind() {
+                            std::io::ErrorKind::Other => (),
+                            _ => unimplemented!()
+                        },
+                        Ok(frame) => {
+
+                            let mut fname: String = String::new();
+                            write!(fname, "{:06}.ppm", nr_iframes);
+
+                            let f = OpenOptions::new()
+                                .write(true)
+                                .create(true)
+                                .open(fname)?;
+                            let mut writer = io::BufWriter::new(f);
+
+                            write_ppm(&frame, &mut writer).is_ok();
+                            nr_iframes += 1;
+                            ()
+                        }
+                    }
 
                     reader.read_exact(&mut buf)?;
                     reader.seek_relative(-4)?;
