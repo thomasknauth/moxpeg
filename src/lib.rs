@@ -596,7 +596,7 @@ impl Frame {
         }
     }
 
-    fn put_pixel(&mut self, dest: &mut Vec<u8>, d_index: i32, y_index: i32, r: i32, g: i32, b: i32, y_offset: i32, dest_offset: i32) {
+    fn put_pixel(&self, dest: &mut Vec<u8>, d_index: i32, y_index: i32, r: i32, g: i32, b: i32, y_offset: i32, dest_offset: i32) {
         let RI = 0;
         let GI = 1;
         let BI = 2;
@@ -614,7 +614,7 @@ impl Frame {
 
     // Convert a frame from YCrCb to RGB.
     // Modeled after PLM_DEFINE_FRAME_CONVERT_FUNCTION from pl_mpeg.
-    fn to_rgb(&mut self) -> Vec<u8> {
+    fn to_rgb(&self) -> Vec<u8> {
 
         let bytes_per_pixel = 3i32;
         let mut dest = vec![0; usize::try_from(i32::from(self.width) * i32::from(self.height) * bytes_per_pixel).unwrap()];
