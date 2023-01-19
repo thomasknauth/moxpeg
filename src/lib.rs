@@ -1065,7 +1065,6 @@ fn parse_picture<T: Read + Seek>(f: &mut std::io::BufReader<T>, seqhdr: &Sequenc
     trace!("frame.cr={:x?}", &container.frame.cr.data[0..16]);
     trace!("frame.cb={:x?}", &container.frame.cb.data[0..16]);
 
-    let pic = container.frame.to_rgb();
     let duration = start.elapsed();
 
     if PROFILE {
