@@ -18,10 +18,13 @@ use std::io::Write;
 use std::fmt::Write as FmtWrite;
 use std::fs::File;
 use std::fs::OpenOptions;
+use std::time::{Duration, Instant};
 use stream::MpegVideoStream;
 
 extern crate log;
 use log::{trace};
+
+const PROFILE: bool = false;
 
 const PACK_START_CODE: u8 = 0xBA;
 const SYSTEM_HEADER_START_CODE: u8 = 0xBB;
@@ -616,6 +619,8 @@ impl Frame {
     // Modeled after PLM_DEFINE_FRAME_CONVERT_FUNCTION from pl_mpeg.
     fn to_rgb(&self) -> Vec<u8> {
 
+        let start = Instant::now();
+
         let bytes_per_pixel = 3i32;
         let mut dest = vec![0; usize::try_from(i32::from(self.width) * i32::from(self.height) * bytes_per_pixel).unwrap()];
         let stride: i32 = i32::from(self.width) * bytes_per_pixel;
@@ -650,6 +655,13 @@ impl Frame {
 		            d_index += i32::from(2 * bytes_per_pixel);
             }
         }
+
+        let duration = start.elapsed();
+
+        if PROFILE {
+            println!("to_rgb() took {:?}", duration);
+        }
+
         dest
     }
 }
@@ -991,6 +1003,9 @@ fn advance_to_next_start_code<F: Read + Seek>(f: &mut BufReader<F>) -> io::Resul
 }
 
 fn parse_picture<T: Read + Seek>(f: &mut std::io::BufReader<T>, seqhdr: &SequenceHeader) -> io::Result<Frame> {
+
+    let start = Instant::now();
+
     let mut buf: [u8; 4] = [0; 4];
 
     f.read_exact(&mut buf)?;
@@ -1051,6 +1066,11 @@ fn parse_picture<T: Read + Seek>(f: &mut std::io::BufReader<T>, seqhdr: &Sequenc
     trace!("frame.cb={:x?}", &container.frame.cb.data[0..16]);
 
     let pic = container.frame.to_rgb();
+    let duration = start.elapsed();
+
+    if PROFILE {
+        println!("parse_picture() took {:?}", duration);
+    }
 
     return Ok(container.frame);
 }
@@ -1060,6 +1080,7 @@ fn parse_picture<T: Read + Seek>(f: &mut std::io::BufReader<T>, seqhdr: &Sequenc
  */
 fn write_ppm<W: Write>(frame: &Frame, writer: &mut W) -> io::Result<()> {
 
+    let start = Instant::now();
 
     write!(writer, "P3\n");
     write!(writer, "{} {}\n", frame.width, frame.height);
@@ -1079,6 +1100,12 @@ fn write_ppm<W: Write>(frame: &Frame, writer: &mut W) -> io::Result<()> {
             write!(writer, "{} {} {} ", b[idx], b[idx+1], b[idx+2]);
         }
         write!(writer, "\n");
+    }
+
+    let duration = start.elapsed();
+
+    if PROFILE {
+        println!("write_ppm() took {:?}", duration);
     }
 
     Ok(())
