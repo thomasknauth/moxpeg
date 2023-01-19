@@ -856,8 +856,6 @@ impl Container {
             // For n = 1 to be valid, must be an I-frame.
             let mut n = 1;
 
-            let mut coeff_str: String = "coeff= ".to_string();
-
             loop {
                 let mut level = 0i32;
                 let mut run = 0u8;
@@ -866,7 +864,6 @@ impl Container {
                 let coeff = read_huffman(&VIDEO_DCT_COEFF, bs).unwrap();
 
                 if (coeff == 0x0001) && (n > 0) && (bs.read::<u8>(1).unwrap() == 0) {
-                    write!(coeff_str, "{}", coeff);
                     break;
                 }
 
@@ -890,7 +887,6 @@ impl Container {
                 }
 
                 let post = bs.position_in_bits().unwrap();
-                write!(coeff_str, "{} ({},{}) {} {} ", coeff, run, level, pre, post);
 
                 n += run;
 
@@ -920,12 +916,9 @@ impl Container {
                     level = -2048;
                 }
 
-                write!(coeff_str, ", level={}", level);
                 block_data[usize::from(de_zig_zagged)] = level * VIDEO_PREMULTIPLIER_MATRIX[usize::from(de_zig_zagged)];
 
             }
-
-            trace!("{}", coeff_str);
 
             let mut block_str = "".to_string();
             for i in 0..64 {
@@ -1069,11 +1062,6 @@ static mut pic_count: i32 = 0;
  */
 fn write_ppm(width: i32, height: i32, b: &Vec<u8>) -> io::Result<()> {
 
-    let mut s: String = "".to_string();
-    for val in b.iter() {
-        write!(s, "{} ", val);
-    }
-    trace!("pixel_data={}", s);
 
     let mut fname: String = "my".to_string();
     write!(fname, "{}.ppm", unsafe { pic_count += 1; pic_count });
