@@ -93,8 +93,8 @@ impl SequenceHeader {
     }
     fn frame_rate(&self) -> f32 {
         let idx = self.raw[3] & 0x0F;
-        let table: [f32; 4] = [
-            0.0, 24000./1001., 24.0, 25.0];
+        let table: [f32; 9] = [
+            0.0, 24000./1001., 24.0, 25.0, 29.97, 30.0, 50.0, 59.94, 60.0];
         table[idx as usize]
     }
 }
