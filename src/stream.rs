@@ -28,7 +28,7 @@ impl MpegVideoStream {
 
     pub fn new(f: &mut File) -> MpegVideoStream {
         let mut buf = vec![];
-        iso11172_stream(f, &mut buf);
+        iso11172_stream(f, &mut buf).unwrap();
         Self {cursor: std::io::Cursor::<Vec<u8>>::new(buf)}
     }
 }

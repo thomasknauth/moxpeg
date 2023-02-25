@@ -10,6 +10,7 @@
 // https://github.com/phoboslab/pl_mpeg
 
 mod stream;
+mod idct_23002_2;
 
 use bitstream_io::BitRead;
 use std::io;
@@ -466,7 +467,7 @@ fn is_start_code(b: &[u8; 4], code: u8) -> bool {
 }
 
 fn is_video_layer_start_code(b: &[u8; 4]) -> bool {
-    b[0] == 0 && b[1] == 0 && b[2] == 1 && b[3] >= 0 && b[3] <= GROUP_OF_PICTURES_START_VALUE
+    b[0] == 0 && b[1] == 0 && b[2] == 1 && b[3] <= GROUP_OF_PICTURES_START_VALUE
 }
 
 fn is_packet_start_code(b: &[u8; 4]) -> bool {
@@ -600,19 +601,19 @@ impl Frame {
     }
 
     fn put_pixel(&self, dest: &mut Vec<u8>, d_index: i32, y_index: i32, r: i32, g: i32, b: i32, y_offset: i32, dest_offset: i32) {
-        let RI = 0;
-        let GI = 1;
-        let BI = 2;
+        let red_idx = 0;
+        let green_idx = 1;
+        let blue_idx = 2;
         let idx: usize = (i32::from(y_index) + y_offset).try_into().unwrap();
 	      let y: i32 = ((i32::from(self.y.data[idx])-16) * 76309) >> 16;
-	      dest[usize::try_from(d_index + dest_offset + RI).unwrap()] = clamp(y + r);
-	      dest[usize::try_from(d_index + dest_offset + GI).unwrap()] = clamp(y - g);
-	      dest[usize::try_from(d_index + dest_offset + BI).unwrap()] = clamp(y + b);
+	      dest[usize::try_from(d_index + dest_offset + red_idx).unwrap()] = clamp(y + r);
+	      dest[usize::try_from(d_index + dest_offset + green_idx).unwrap()] = clamp(y - g);
+	      dest[usize::try_from(d_index + dest_offset + blue_idx).unwrap()] = clamp(y + b);
 
-        // print!("{} {} {} {}, ", usize::try_from(d_index + dest_offset + RI).unwrap(),
-        //        dest[usize::try_from(d_index + dest_offset + RI).unwrap()],
-        //        dest[usize::try_from(d_index + dest_offset + GI).unwrap()],
-        //        dest[usize::try_from(d_index + dest_offset + BI).unwrap()]);
+        // print!("{} {} {} {}, ", usize::try_from(d_index + dest_offset + red_idx).unwrap(),
+        //        dest[usize::try_from(d_index + dest_offset + red_idx).unwrap()],
+        //        dest[usize::try_from(d_index + dest_offset + green_idx).unwrap()],
+        //        dest[usize::try_from(d_index + dest_offset + blue_idx).unwrap()]);
     }
 
     // Convert a frame from YCrCb to RGB.
@@ -756,7 +757,7 @@ impl Container {
         trace!("Slice start code at stream offset 0x{:x} bytes. slice_nr={}.",
                  f.stream_position().unwrap() - 4, slice_nr);
 
-        f.seek(SeekFrom::Current(4)).is_ok();
+        f.seek(SeekFrom::Current(4))?;
 
         self.dc_predictor = [128; 3];
 
@@ -796,7 +797,7 @@ impl Container {
 
         trace!("byte_aligned={}", stream.byte_aligned());
         let pre = f.stream_position().unwrap();
-        advance_to_next_start_code(f);
+        advance_to_next_start_code(f)?;
         let post = f.stream_position().unwrap();
         // println!("advance: {} {}", pre, post);
 
@@ -902,7 +903,7 @@ impl Container {
 
                 n += run;
 
-                if n < 0 || n >= 64 {
+                if n >= 64 {
                     panic!();
                 }
 
@@ -934,7 +935,7 @@ impl Container {
 
             let mut block_str = "".to_string();
             for i in 0..64 {
-                write!(block_str, "{} ", block_data[i]);
+                write!(block_str, "{} ", block_data[i]).ok()?;
             }
             trace!("{}", block_str);
 
@@ -1081,9 +1082,9 @@ fn write_ppm<W: Write>(frame: &Frame, writer: &mut W) -> io::Result<()> {
 
     let start = Instant::now();
 
-    write!(writer, "P3\n");
-    write!(writer, "{} {}\n", frame.width, frame.height);
-    write!(writer, "255\n");
+    write!(writer, "P3\n")?;
+    write!(writer, "{} {}\n", frame.width, frame.height)?;
+    write!(writer, "255\n")?;
 
     let b = frame.to_rgb();
 
@@ -1183,7 +1184,7 @@ pub fn parse_mpeg(path: &str) -> io::Result<()> {
                         Ok(frame) => {
 
                             let mut fname: String = String::new();
-                            write!(fname, "{:06}.ppm", nr_iframes);
+                            write!(fname, "{:06}.ppm", nr_iframes).unwrap();
 
                             let f = OpenOptions::new()
                                 .write(true)
@@ -1191,7 +1192,7 @@ pub fn parse_mpeg(path: &str) -> io::Result<()> {
                                 .open(fname)?;
                             let mut writer = io::BufWriter::new(f);
 
-                            write_ppm(&frame, &mut writer).is_ok();
+                            write_ppm(&frame, &mut writer)?;
                             nr_iframes += 1;
                             ()
                         }
@@ -1211,147 +1212,6 @@ pub fn parse_mpeg(path: &str) -> io::Result<()> {
     }
 }
 
-// The IDCT code is a manual translation of the C [1, 2] code to Rust.
-//
-// [1] http://www.reznik.org/software.html
-// [2] http://www.reznik.org/software/ISO-IEC-23002-2.zip
-//
-fn pmul_1(y: &mut i32, z: &mut i32) {
-    // int y2, y3;          \
-    // y2 = (y >> 3) - (y >> 7); \
-    let y2: i32 = (*y >> 3) - (*y >> 7);
-    // y3 = y2 - (y >> 11); \
-    let y3: i32 = y2 - (*y >> 11);
-    *z = y2 + (y3 >> 1);
-    *y = *y - y2;
-}
-
-fn pmul_2(y: &mut i32, z: &mut i32) {
-    // int y2;              \
-    // y2 = (y >> 9) - y;   \
-    let y2: i32 = (*y >> 9) - *y;
-    *z = *y >> 1;
-    *y = (y2 >> 2) - y2;
-}
-
-fn pmul_3(y: &mut i32, z: &mut i32) {
-    // y2 = y + (y >> 5);   \
-    let y2: i32 = *y + (*y >> 5);
-    // y3 = y2 >> 2;        \
-    let y3 = y2 >> 2;
-    // y  = y3 + (y >> 4);  \
-    *y = y3 + (*y >> 4);
-    // z  = y2 - y3;        \
-    *z = y2 - y3;
-}
-
-fn scaled_1d_idct(input: &mut [i32], out: &mut [i32]) {
-  let [mut x0, mut x1, mut x2, mut x3, mut x4, mut x5, mut x6, mut x7]: [i32; 8];
-  let [mut xa, mut xb]: [i32; 2];
-
-  x1 = input[1];
-  x3 = input[3];
-  x5 = input[5];
-  x7 = input[7];
-
-  xa = x1 + x7;
-  xb = x1 - x7;
-
-  x1 = xa + x3;
-  x3 = xa - x3;
-  x7 = xb + x5;
-  x5 = xb - x5;
-
-  pmul_1(&mut x3, &mut xa);
-  pmul_1(&mut x5, &mut xb);
-  x3 = x3 - xb;
-  x5 = x5 + xa;
-
-  pmul_2(&mut x1, &mut xa);
-  pmul_2(&mut x7, &mut xb);
-  x1 = x1 + xb;
-  x7 = x7 - xa;
-
-  /* even part: */
-  x0 = input[0];
-  x2 = input[2];
-  x4 = input[4];
-  x6 = input[6];
-
-  pmul_3(&mut x2, &mut xa);
-  pmul_3(&mut x6, &mut xb);
-  x2 = x2 - xb;
-  x6 = x6 + xa;
-
-  xa = x0 + x4;
-  xb = x0 - x4;
-
-  x0 = xa + x6;
-  x6 = xa - x6;
-  x4 = xb + x2;
-  x2 = xb - x2;
-
-  /* 1st stage: */
-  out[0*8] = x0 + x1;
-  out[1*8] = x4 + x5;
-  out[2*8] = x2 + x3;
-  out[3*8] = x6 + x7;
-  out[4*8] = x6 - x7;
-  out[5*8] = x2 - x3;
-  out[6*8] = x4 - x5;
-  out[7*8] = x0 - x1;
-}
-//const SEQUENCE_HEADER: [u8; 4] = [0x00, 0x00, 0x01, 0xB3];
-const A: i32 = 1024;
-const B: i32 = 1138;
-const C: i32 = 1730;
-const D: i32 = 1609;
-const E: i32 = 1264;
-const F: i32 = 1922;
-const G: i32 = 1788;
-const H: i32 = 2923;
-const I: i32 = 2718;
-const J: i32 = 2528;
-
-/* 2D scale-factor matrix: */
-const scale: [i32; 8*8] = [
-  A, B, C, D, A, D, C, B,
-  B, E, F, G, B, G, F, E,
-  C, F, H, I, C, I, H, F,
-  D, G, I, J, D, J, I, G,
-  A, B, C, D, A, D, C, B,
-  D, G, I, J, D, J, I, G,
-  C, F, H, I, C, I, H, F,
-  B, E, F, G, B, G, F, E
-];
-
-fn idct_23002_2(P: &mut [i32; 64]) {
-
-    let mut block: [i32; 8*8] = [0; 8*8];
-    let mut block2: [i32; 8*8] = [0; 8*8];
-
-    /* multiplier-based scaling:
-     *  - can be moved outside the transform, executed for non-zero coeffs only,
-     *    or absorbed in quantization step. */
-    for i in 0..64 {
-        block[i] = scale[i] * i32::from(P[i]);
-    }
-    block[0] += 1 << 12;           /* bias DC for proper rounding */
-
-    /* perform  scaled 1D IDCT for rows and columns: */
-    for i in 0..8 {
-        scaled_1d_idct (&mut block[i*8..], &mut block2[i..]);
-    }
-
-    for i in 0..8 {
-        scaled_1d_idct (&mut block2[i*8..], &mut block[i..]);
-    }
-
-    /* right-shift and store the results: */
-    for i in 0..64 {
-        P[i] = (block[i] >> 13).try_into().unwrap();
-    }
-}
 
 fn plm_video_idct(block: &mut [i32; 64]) {
 
@@ -1421,6 +1281,7 @@ fn plm_video_idct(block: &mut [i32; 64]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use idct_23002_2::idct_23002_2;
 
     #[test]
     fn it_works() {
@@ -1444,7 +1305,7 @@ mod tests {
         ];
         let mut m2: [i32; 8*8] = m.clone();
 
-        idct_23002_2(&mut m);
+        idct_23002_2::idct_23002_2(&mut m);
 
         let expect: [i32; 8*8] = [
             -66, -63, -71, -68, -56, -65, -68, -46,
