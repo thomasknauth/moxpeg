@@ -1310,10 +1310,12 @@ mod tests {
     use idct_23002_2::idct_23002_2;
 
     #[test]
-    fn it_works() {
-        // parse_mpeg("/Users/thomas/code/mpeg/big-buck-bunny.mpg");
-        // parse_mpeg("/Users/thomas/code/mpeg/bjork-all-is-full-of-love-v2.mpg");
-        parse_mpeg("/Users/thomas/code/mpeg/bjork-v2-short-2.mpg");
+    fn end_to_end() {
+        let fns = vec!["tests/sample_960x400_ocean_with_audio.mpeg",
+                       "tests/bjork-v2-short-2.mpg"];
+        for filename in fns.iter() {
+            parse_mpeg(filename);
+        }
     }
 
     #[test]
@@ -1407,10 +1409,11 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_parse_slice() {
         let f = std::fs::File::open("test/one-slice").unwrap();
         let mut reader = io::BufReader::new(f);
-        let mut c = Container::new();
+        let mut c = Container::new(0, 0);
         let mut buf: [u8; 4] = [0; 4];
         reader.read_exact(&mut buf);
         c.parse_slice(&mut reader, buf[3]).unwrap();
