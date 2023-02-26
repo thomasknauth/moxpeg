@@ -1312,7 +1312,7 @@ mod tests {
     #[test]
     fn end_to_end() {
         let fns = vec!["tests/sample_960x400_ocean_with_audio.mpeg",
-                       "tests/bjork-v2-short-2.mpg"];
+                       "tests/bjork-all-is-full-of-love.mpg"];
         for filename in fns.iter() {
             parse_mpeg(filename);
         }
