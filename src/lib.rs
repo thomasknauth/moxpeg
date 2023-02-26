@@ -538,7 +538,14 @@ fn parse_pack<F: Read+Seek>(f: &mut F, data: &mut Vec<u8>) -> io::Result<()> {
     }
 
     loop {
-        f.read_exact(&mut buf)?;
+
+        match f.read_exact(&mut buf) {
+            Err(e) => match e.kind() {
+                std::io::ErrorKind::UnexpectedEof => return Ok(()),
+                _ => return Err(e)
+            },
+            _ => {},
+        };
 
         if !is_packet_start_code(&buf) {
             f.seek(SeekFrom::Current(-4))?;
@@ -560,7 +567,13 @@ fn parse_pack<F: Read+Seek>(f: &mut F, data: &mut Vec<u8>) -> io::Result<()> {
 pub fn iso11172_stream<F: Read+Seek>(f: &mut F, data: &mut Vec<u8>) -> io::Result<()> {
     loop {
         let mut buf = [0; 4];
-        f.read_exact(&mut buf)?;
+        match f.read_exact(&mut buf) {
+            Err(e) => match e.kind() {
+                std::io::ErrorKind::UnexpectedEof => return Ok(()),
+                _ => return Err(e)
+            },
+            _ => {},
+        }
 
         if !is_start_code(&buf, PACK_START_CODE) {
             assert!(false);
@@ -579,6 +592,11 @@ struct Frame {
 }
 
 impl Frame {
+
+    fn new_dummy() -> Frame {
+        Frame::new(0,0)
+    }
+
     fn new(w: u16, h: u16) -> Frame {
 
         let macroblock_width = (w + 15) / 16;
@@ -1029,7 +1047,13 @@ fn parse_picture<T: Read + Seek>(f: &mut std::io::BufReader<T>, seqhdr: &Sequenc
             if start_code == GROUP_OF_PICTURES_START_VALUE ||
                 start_code == SEQUENCE_HEADER_START_VALUE ||
                 start_code == 0 {
-                    return Err(std::io::Error::new(std::io::ErrorKind::Other, "oh no!"));
+                    // Somehow return and continue regular control
+                    // flow in caller.  This is not an error but we
+                    // also cannot return a valid frame.
+                    //
+                    // The control flow should be cleaner once we
+                    // support P frames too.
+                    return Ok(Frame::new_dummy());
                 }
             f.seek_relative(4)?;
         }
@@ -1177,22 +1201,25 @@ pub fn parse_mpeg(path: &str) -> io::Result<()> {
 
                     match parse_picture(&mut reader, &seqhdr.as_ref().unwrap()) {
                         Err(e) => match e.kind() {
-                            std::io::ErrorKind::Other => (),
-                            _ => unimplemented!()
+                            std::io::ErrorKind::UnexpectedEof => return Ok(()),
+                            _ => return Err(e)
                         },
+
                         Ok(frame) => {
 
-                            let mut fname: String = String::new();
-                            write!(fname, "{:06}.ppm", nr_iframes).unwrap();
+                            if frame.width > 0 && frame.height > 0 {
+                                let mut fname: String = String::new();
+                                write!(fname, "{:06}.ppm", nr_iframes).unwrap();
 
-                            let f = OpenOptions::new()
-                                .write(true)
-                                .create(true)
-                                .open(fname)?;
-                            let mut writer = io::BufWriter::new(f);
+                                let f = OpenOptions::new()
+                                    .write(true)
+                                    .create(true)
+                                    .open(fname)?;
+                                let mut writer = io::BufWriter::new(f);
 
-                            write_ppm(&frame, &mut writer)?;
-                            nr_iframes += 1;
+                                write_ppm(&frame, &mut writer)?;
+                                nr_iframes += 1;
+                            }
                             ()
                         }
                     }
