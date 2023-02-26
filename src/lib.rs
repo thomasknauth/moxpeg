@@ -1012,17 +1012,17 @@ fn parse_picture<T: Read + Seek>(f: &mut std::io::BufReader<T>, seqhdr: &Sequenc
     f.read_exact(&mut buf)?;
     assert!(is_start_code(&buf, PICTURE_START_VALUE));
 
-    println!("Picture start code at offset {}.",
-             f.stream_position().unwrap() - 4);
+    trace!("Picture start code at offset {}.",
+           f.stream_position().unwrap() - 4);
 
     let hdr = PictureHeader::new(f).unwrap();
-    println!("seq nr: {}, frame type: {}", hdr.sequence_nr(), hdr.frame_type());
+    trace!("seq nr: {}, frame type: {}", hdr.sequence_nr(), hdr.frame_type());
 
     if hdr.frame_type() != FRAME_TYPE_I {
 
         let frame_type = if hdr.frame_type() == FRAME_TYPE_I {
             "I-frame" } else { "non-I-frame" };
-        println!("Skipping {} @ offset {}", frame_type, f.stream_position().unwrap());
+        trace!("Skipping {} @ offset {}", frame_type, f.stream_position().unwrap());
 
         loop {
             let start_code = next_start_code(f)?;
@@ -1096,10 +1096,10 @@ fn write_ppm<W: Write>(frame: &Frame, writer: &mut W) -> io::Result<()> {
         // let s = slice.iter().map(|val| format!("{}", val)).collect::<Vec<String>>().join(" ");
 
         for col in 0..frame.width {
-            let idx = usize::try_from(((row * frame.width) + col) * 3).unwrap();
-            write!(writer, "{} {} {} ", b[idx], b[idx+1], b[idx+2]);
+            let idx = usize::try_from(((i32::from(row) * i32::from(frame.width)) + i32::from(col)) * 3).unwrap();
+            write!(writer, "{} {} {} ", b[idx], b[idx+1], b[idx+2])?;
         }
-        write!(writer, "\n");
+        write!(writer, "\n")?;
     }
 
     let duration = start.elapsed();
@@ -1152,29 +1152,28 @@ pub fn parse_mpeg(path: &str) -> io::Result<()> {
 
         if is_start_code(&buf, SEQUENCE_HEADER_START_VALUE) {
 
-                println!("Sequence start code at offset {}.",
-                         reader.stream_position().unwrap() - 4);
+                trace!("Sequence start code at offset {}.",
+                       reader.stream_position().unwrap() - 4);
 
                 seqhdr = Some(SequenceHeader::new(&mut reader));
 
-                println!("width: {}", seqhdr.as_ref().unwrap().hsize());
-                println!("height: {}", seqhdr.as_ref().unwrap().vsize());
-                println!("aspect ratio: {}", seqhdr.as_ref().unwrap().aspect_ratio_str());
-                println!("frame rate: {}", seqhdr.as_ref().unwrap().frame_rate());
+                trace!("width: {}", seqhdr.as_ref().unwrap().hsize());
+                trace!("height: {}", seqhdr.as_ref().unwrap().vsize());
+                trace!("aspect ratio: {}", seqhdr.as_ref().unwrap().aspect_ratio_str());
+                trace!("frame rate: {}", seqhdr.as_ref().unwrap().frame_rate());
 
         } else if is_start_code(&buf, GROUP_OF_PICTURES_START_VALUE) {
 
-                println!("Group of Pictures start code at offset {}.",
-                         reader.stream_position().unwrap() - 4);
+                trace!("Group of Pictures start code at offset {}.",
+                       reader.stream_position().unwrap() - 4);
 
                 let mut count = 0;
                 let hdr = GroupOfPictures::new(&mut reader).unwrap();
 
-                println!("hour: {} minute: {} sec: {} frame: {}", hdr.hour(), hdr.min(), hdr.sec(), hdr.frame());
+                trace!("hour: {} minute: {} sec: {} frame: {}", hdr.hour(), hdr.min(), hdr.sec(), hdr.frame());
 
                 loop {
                     count += 1;
-
 
                     match parse_picture(&mut reader, &seqhdr.as_ref().unwrap()) {
                         Err(e) => match e.kind() {
@@ -1205,7 +1204,7 @@ pub fn parse_mpeg(path: &str) -> io::Result<()> {
                         break;
                     }
                 }
-                println!("{} pictures in group.", count);
+                trace!("{} pictures in group.", count);
         } else {
             reader.seek_relative(-3)?;
         }
@@ -1370,11 +1369,14 @@ mod tests {
     #[test]
     fn test_parse_picture() {
         let mut buf: Vec<u8> = vec![];
-        buf.extend(PICTURE_START_CODE);
-        buf.extend(&[0,0,0,0,0,0,0,0]);
+        buf.extend(&[0; 8]);
+        buf.extend(&[0, 0, 1, PICTURE_START_VALUE]);
+        // bits 0-9 are 0; bits 10-12 equal FRAME_TYPE_I.
+        buf.extend(&[0,0b0000_1000,0,0,0,0,0,0]);
         let cursor = io::Cursor::new(buf);
         let mut reader = io::BufReader::new(cursor);
-        parse_picture(&mut reader);
+        let seqhdr = SequenceHeader::new(&mut reader);
+        parse_picture(&mut reader, &seqhdr);
     }
 
     #[test]
@@ -1402,9 +1404,11 @@ mod tests {
     fn test_iso11172_stream() {
         let mut f = OpenOptions::new()
             .read(true)
-            .open("/Users/thomas/code/mpeg/bjork-v2-short-2.mpg").expect("Unable to open file");
+            .open("tests/bjork-v2-short-2.mpg").expect("Unable to open file");
         let mut reader = io::BufReader::new(f);
 
-        iso11172_stream(&mut reader);
+        let mut data = Vec::new();
+
+        iso11172_stream(&mut reader, &mut data);
     }
 }
