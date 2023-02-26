@@ -583,7 +583,7 @@ pub fn iso11172_stream<F: Read+Seek>(f: &mut F, data: &mut Vec<u8>) -> io::Resul
     }
 }
 
-struct Frame {
+pub struct Frame {
     width: u16,
     height: u16,
     y: Plane,
@@ -744,6 +744,45 @@ fn decode_dc_diff(coded: u8, size: u8) -> i16 {
         return coded.into();
     } else {
         return (-(1i16 << size))|i16::from(coded+1)
+    }
+}
+
+pub trait FrameProcessor {
+    /// Handle a decoded frame.
+    ///
+    /// A decoded frame is passed to this function to, for example,
+    /// display the frame on the screen or writing the frame to disk.
+    fn process(&mut self, f: &Frame);
+}
+
+pub struct PersistFrames {
+    /// Count the number of persisted frames.
+    frame_count: i32
+}
+
+impl FrameProcessor for PersistFrames {
+    /// Writes a frame in PPM format to a file.
+    fn process(&mut self, frame: &Frame) {
+        let mut fname: String = String::new();
+        write!(fname, "{:06}.ppm", self.frame_count).unwrap();
+
+        let f = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .open(fname).unwrap();
+        let mut writer = io::BufWriter::new(f);
+
+        write_ppm(frame, &mut writer).unwrap();
+        self.frame_count += 1;
+    }
+}
+
+impl PersistFrames {
+
+    pub fn new() -> Self {
+        PersistFrames {
+            frame_count: 0
+        }
     }
 }
 
@@ -1156,7 +1195,7 @@ fn next_start_code<T: Read+Seek>(r: &mut std::io::BufReader<T>) -> io::Result<u8
     }
 }
 
-pub fn parse_mpeg(path: &str) -> io::Result<()> {
+pub fn parse_mpeg<T: FrameProcessor>(path: &str, frame_handler: &mut T) -> io::Result<()> {
 
     let mut f = OpenOptions::new()
         .read(true)
@@ -1208,17 +1247,7 @@ pub fn parse_mpeg(path: &str) -> io::Result<()> {
                         Ok(frame) => {
 
                             if frame.width > 0 && frame.height > 0 {
-                                let mut fname: String = String::new();
-                                write!(fname, "{:06}.ppm", nr_iframes).unwrap();
-
-                                let f = OpenOptions::new()
-                                    .write(true)
-                                    .create(true)
-                                    .open(fname)?;
-                                let mut writer = io::BufWriter::new(f);
-
-                                write_ppm(&frame, &mut writer)?;
-                                nr_iframes += 1;
+                                frame_handler.process(&frame);
                             }
                             ()
                         }
@@ -1309,12 +1338,17 @@ mod tests {
     use super::*;
     use idct_23002_2::idct_23002_2;
 
+    struct NoopFrameProcessor {}
+    impl FrameProcessor for NoopFrameProcessor {
+        fn process(&mut self, f: &Frame) {}
+    }
+
     #[test]
     fn end_to_end() {
         let fns = vec!["tests/sample_960x400_ocean_with_audio.mpeg",
                        "tests/bjork-all-is-full-of-love.mpg"];
         for filename in fns.iter() {
-            parse_mpeg(filename);
+            parse_mpeg(filename, &mut NoopFrameProcessor {});
         }
     }
 
