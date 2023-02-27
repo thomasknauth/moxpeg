@@ -1,22 +1,24 @@
 use mpeg_ox::parse_mpeg;
 
+use std::io;
 use std::env;
 use std::fs::OpenOptions;
 use std::io::BufReader;
 
 extern crate env_logger;
 
-fn main() {
+// Extract key frames from a video source.
+
+fn main() -> io::Result<()> {
 
     env_logger::init();
 
     let args: Vec<String> = env::args().collect();
 
-    let mut file = "/Users/thomas/code/mpeg/bjork-v2-short-2.mpg";
-
     if args.len() >= 2 {
-        file = &args[1];
+        parse_mpeg(&args[1], &mut PersistFrames::new())?;
+    } else {
+        println!("Usage: ./binary <mpeg video file name>");
     }
-
-    parse_mpeg(&file);
+    Ok(())
 }
