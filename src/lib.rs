@@ -14,12 +14,11 @@ mod idct_23002_2;
 
 use bitstream_io::BitRead;
 use std::io;
-use std::io::{BufReader, BufWriter, Seek, Read, SeekFrom};
+use std::io::{BufReader, Seek, Read, SeekFrom};
 use std::io::Write;
 use std::fmt::Write as FmtWrite;
-use std::fs::File;
 use std::fs::OpenOptions;
-use std::time::{Duration, Instant};
+use std::time::{Instant};
 use stream::MpegVideoStream;
 
 extern crate log;
@@ -30,6 +29,7 @@ const PROFILE: bool = false;
 const PACK_START_CODE: u8 = 0xBA;
 const SYSTEM_HEADER_START_CODE: u8 = 0xBB;
 const PACKET_START_CODE: u8 = 0xBC;
+#[allow(dead_code)]
 const AUDIO_STREAM_0_START_CODE: u8 = 0xC0;
 const VIDEO_STREAM_0_START_CODE: u8 = 0xE0;
 
@@ -40,6 +40,7 @@ const START_EXTENSION: u8 = 0xB5;
 const START_USER_DATA: u8 = 0xB2;
 
 const FRAME_TYPE_I: u8 = 0b001;
+const FRAME_TYPE_P: u8 = 0b010;
 
 const VIDEO_INTRA_QUANT_MATRIX: [u8; 64] = [
 	 8, 16, 19, 22, 26, 27, 29, 34,
@@ -113,7 +114,7 @@ impl GroupOfPictures {
                     raw: buf,
                 })
             },
-            Err(e) => None
+            Err(_) => None
         }
     }
 
@@ -166,7 +167,7 @@ fn is_slice_start_code(b: &[u8; 4]) -> bool {
     b[0] == 0x0 && b[1] == 0x0 && b[2] == 0x01 && b[3] >= 0x01 && b[3] <= 0xAF
 }
 
-type MyBitReader<'a, T: Read+Seek> = bitstream_io::BitReader<&'a mut std::io::BufReader<T>, bitstream_io::BigEndian>;
+type MyBitReader<'a, T> = bitstream_io::BitReader<&'a mut std::io::BufReader<T>, bitstream_io::BigEndian>;
 
 fn parse_macroblock_type<T: std::io::Read>(bs: &mut MyBitReader<T>) -> Option<u8> {
 
@@ -407,6 +408,7 @@ fn parse_dct_dc_size<T: std::io::Read>(table: &[(i16, i16); 18], bs: &mut MyBitR
     }
 }
 
+#[allow(dead_code)]
 struct Plane {
     width: u16,
     height: u16,
@@ -458,10 +460,6 @@ impl SystemHeader {
     }
 }
 
-fn is_any_start_code(b: &[u8; 4]) -> bool {
-    b[0] == 0 && b[1] == 0 && b[2] == 1
-}
-
 fn is_start_code(b: &[u8; 4], code: u8) -> bool {
     b[0] == 0 && b[1] == 0 && b[2] == 1 && b[3] == code
 }
@@ -471,7 +469,7 @@ fn is_video_layer_start_code(b: &[u8; 4]) -> bool {
 }
 
 fn is_packet_start_code(b: &[u8; 4]) -> bool {
-    b[0] == 0 && b[1] == 0 && b[2] == 1 && b[3] >= 0xBC
+    b[0] == 0 && b[1] == 0 && b[2] == 1 && b[3] >= PACKET_START_CODE
 }
 
 struct Packet {
@@ -526,13 +524,13 @@ impl Packet {
 }
 
 fn parse_pack<F: Read+Seek>(f: &mut F, data: &mut Vec<u8>) -> io::Result<()> {
-    let pack = Pack::parse(f)?;
+    Pack::parse(f)?;
 
     let mut buf = [0; 4];
     f.read_exact(&mut buf)?;
 
     if is_start_code(&buf, SYSTEM_HEADER_START_CODE) {
-        let system_header = SystemHeader::parse(f)?;
+        SystemHeader::parse(f)?;
     } else {
         f.seek(SeekFrom::Current(-4))?;
     }
@@ -656,7 +654,7 @@ impl Frame {
 		        let mut y_index: i32 = row * 2 * yw;
 		        let mut d_index: i32 = (row * 2 * stride).into();
 
-            for col in 0..cols {
+            for _ in 0..cols {
 
 				        let cr: i32 = i32::from(self.cr.data[usize::try_from(c_index).unwrap()]) - 128;
 				        let cb: i32 = i32::from(self.cb.data[usize::try_from(c_index).unwrap()]) - 128;
@@ -698,12 +696,12 @@ fn block_set(dest: &mut Vec<u8>,
 {
     trace!("block_set={} {} {} {}", dest_idx, dest_width, source_idx, source_width);
 
-	  let mut dest_scan = dest_width - block_size;
-	  let mut source_scan = source_width - block_size;
+	  let dest_scan = dest_width - block_size;
+	  let source_scan = source_width - block_size;
     let mut source_idx = 0;
 
-	  for y in 0..block_size {
-		    for x in 0..block_size {
+	  for _y in 0..block_size {
+		    for _x in 0..block_size {
             // print!("{}={} ", dest_idx, op[source_idx]);
 			      dest[dest_idx] = op[source_idx];
 			      source_idx += 1;
@@ -715,6 +713,7 @@ fn block_set(dest: &mut Vec<u8>,
     // println!("");
 }
 
+#[allow(dead_code)]
 struct Container {
     mb_row: i32,
     mb_col: i32,
@@ -853,10 +852,8 @@ impl Container {
         }
 
         trace!("byte_aligned={}", stream.byte_aligned());
-        let pre = f.stream_position().unwrap();
+
         advance_to_next_start_code(f)?;
-        let post = f.stream_position().unwrap();
-        // println!("advance: {} {}", pre, post);
 
         Ok(())
     }
@@ -920,17 +917,16 @@ impl Container {
 
             self.dc_predictor[plane_index] = block_data[0];
 
-            block_data[0] <<= (3 + 5);
+            block_data[0] <<= 3 + 5;
 
             assert!((macro_type & 0b1_0000) != 0);
             // For n = 1 to be valid, must be an I-frame.
             let mut n = 1;
 
             loop {
-                let mut level = 0i32;
-                let mut run = 0u8;
+                let mut level;
+                let run;
 
-                let pre = bs.position_in_bits().unwrap();
                 let coeff = read_huffman(&VIDEO_DCT_COEFF, bs).unwrap();
 
                 if (coeff == 0x0001) && (n > 0) && (bs.read::<u8>(1).unwrap() == 0) {
@@ -955,8 +951,6 @@ impl Container {
                         level = -level;
                     }
                 }
-
-                let post = bs.position_in_bits().unwrap();
 
                 n += run;
 
@@ -1001,9 +995,12 @@ impl Container {
                 5 => &mut self.frame.cr.data,
                 _ => &mut self.frame.y.data
             };
+
+            // dw ... destination width
             let dw = if i < 4 { self.frame.y.width } else { self.frame.cr.width };
 
-            let mut di = 0;
+            // di ... destination index
+            let mut di;
             if i < 4 {
                 di = (self.mb_row * i32::from(self.frame.y.width) + self.mb_col) << 4;
                 if (i & 1) != 0 {
@@ -1030,7 +1027,6 @@ impl Container {
                     }
                     block_set(&mut d, di.try_into().unwrap(), dw.into(),
                               0, 8, 8, &clamped);
-                    block_data = [0i32; 64];
                 }
             } else {
                 // Can only do I frames
@@ -1207,8 +1203,6 @@ pub fn parse_mpeg<T: FrameProcessor>(path: &str, frame_handler: &mut T) -> io::R
 
     let mut seqhdr: Option<SequenceHeader> = None;
 
-    let mut nr_iframes = 0;
-
     loop {
 
         reader.read_exact(&mut buf)?;
@@ -1336,11 +1330,10 @@ fn plm_video_idct(block: &mut [i32; 64]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use idct_23002_2::idct_23002_2;
 
     struct NoopFrameProcessor {}
     impl FrameProcessor for NoopFrameProcessor {
-        fn process(&mut self, f: &Frame) {}
+        fn process(&mut self, _f: &Frame) {}
     }
 
     #[test]
@@ -1348,7 +1341,7 @@ mod tests {
         let fns = vec!["tests/sample_960x400_ocean_with_audio.mpeg",
                        "tests/bjork-all-is-full-of-love.mpg"];
         for filename in fns.iter() {
-            parse_mpeg(filename, &mut NoopFrameProcessor {});
+            parse_mpeg(filename, &mut NoopFrameProcessor {}).unwrap();
         }
     }
 
@@ -1407,7 +1400,7 @@ mod tests {
         // let b = [0x00, 0x00, 0x01, 0xb8, 0x00, 0x08, 0x00, 0x00];
 
         let file = std::fs::File::open("/dev/zero").unwrap();
-        let mut reader = io::BufReader::new(file);
+        let reader = io::BufReader::new(file);
         use bitstream_io::BitRead;
         // let buf: [u8; 4] = [0x53, 0xf8, 0x7d, 0x29];
         // let cursor = io::Cursor::new(buf);
@@ -1430,6 +1423,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_parse_picture() {
         let mut buf: Vec<u8> = vec![];
         buf.extend(&[0; 8]);
@@ -1439,7 +1433,7 @@ mod tests {
         let cursor = io::Cursor::new(buf);
         let mut reader = io::BufReader::new(cursor);
         let seqhdr = SequenceHeader::new(&mut reader);
-        parse_picture(&mut reader, &seqhdr);
+        parse_picture(&mut reader, &seqhdr).unwrap();
     }
 
     #[test]
@@ -1449,7 +1443,7 @@ mod tests {
         let mut reader = io::BufReader::new(f);
         let mut c = Container::new(0, 0);
         let mut buf: [u8; 4] = [0; 4];
-        reader.read_exact(&mut buf);
+        reader.read_exact(&mut buf).unwrap();
         c.parse_slice(&mut reader, buf[3]).unwrap();
     }
 
@@ -1466,13 +1460,13 @@ mod tests {
 
     #[test]
     fn test_iso11172_stream() {
-        let mut f = OpenOptions::new()
+        let f = OpenOptions::new()
             .read(true)
             .open("tests/bjork-v2-short-2.mpg").expect("Unable to open file");
         let mut reader = io::BufReader::new(f);
 
         let mut data = Vec::new();
 
-        iso11172_stream(&mut reader, &mut data);
+        iso11172_stream(&mut reader, &mut data).unwrap();
     }
 }

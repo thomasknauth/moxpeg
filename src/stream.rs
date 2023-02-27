@@ -1,6 +1,5 @@
-use std::cmp::min;
 use std::fs::File;
-use std::io::{Cursor, Read, SeekFrom};
+use std::io::{SeekFrom};
 use super::iso11172_stream;
 
 /// Provide a Reader that strips away system level packets and only
@@ -36,7 +35,7 @@ impl MpegVideoStream {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Seek;
+    use std::io::{Read, Seek};
 
     #[test]
     fn test1() {
@@ -47,8 +46,8 @@ mod tests {
         // Can only seek backwards.
         // assert_eq!(vs.seek(SeekFrom::Current(1)).unwrap_err().kind(),
         //            std::io::ErrorKind::Unsupported);
-        vs.seek(SeekFrom::Current(-4));
+        vs.seek(SeekFrom::Current(-4)).unwrap();
         let mut buf2 = [0; 4];
-        vs.read(&mut buf2).is_ok();
+        vs.read(&mut buf2).unwrap();
     }
 }

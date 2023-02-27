@@ -1,9 +1,7 @@
-use mpeg_ox::parse_mpeg;
+use mpeg_ox::{parse_mpeg, PersistFrames};
 
 use std::io;
 use std::env;
-use std::fs::OpenOptions;
-use std::io::BufReader;
 
 extern crate env_logger;
 
