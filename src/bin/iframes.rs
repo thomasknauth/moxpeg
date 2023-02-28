@@ -1,22 +1,27 @@
 use mpeg_ox::{parse_mpeg, PersistFrames};
 
+use gflags;
 use std::io;
 use std::env;
 
 extern crate env_logger;
+
+gflags::define! {
+    -f, --file: &std::path::Path
+}
 
 // Extract key frames from a video source.
 
 fn main() -> io::Result<()> {
 
     env_logger::init();
+    let _args = gflags::parse();
 
-    let args: Vec<String> = env::args().collect();
-
-    if args.len() >= 2 {
-        parse_mpeg(&args[1], &mut PersistFrames::new())?;
+    if FILE.is_present() {
+        let path = FILE.flag;
+        parse_mpeg(path.to_str().unwrap(), &mut PersistFrames::new())?;
     } else {
-        println!("Usage: ./binary <mpeg video file name>");
+        gflags::print_help_and_exit(0);
     }
     Ok(())
 }
