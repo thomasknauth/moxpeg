@@ -981,14 +981,15 @@ impl Container {
                 }
 
                 block_data[usize::from(de_zig_zagged)] = level * VIDEO_PREMULTIPLIER_MATRIX[usize::from(de_zig_zagged)];
-
             }
 
-            let mut block_str = "".to_string();
-            for i in 0..64 {
-                write!(block_str, "{} ", block_data[i]).ok()?;
+            if log::log_enabled!(target: "Global", log::Level::Trace) {
+                let mut block_str = "".to_string();
+                for i in 0..64 {
+                    write!(block_str, "{} ", block_data[i]).ok()?;
+                }
+                trace!("{}", block_str);
             }
-            trace!("{}", block_str);
 
             let mut d = match i {
                 4 => &mut self.frame.cb.data,
