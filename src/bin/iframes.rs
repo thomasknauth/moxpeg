@@ -10,6 +10,10 @@ gflags::define! {
     -f, --file: &std::path::Path
 }
 
+gflags::define! {
+    --stats = false
+}
+
 // Extract key frames from a video source.
 
 fn main() -> io::Result<()> {
@@ -21,6 +25,7 @@ fn main() -> io::Result<()> {
         let path = FILE.flag;
         let mut decoder = MpegDecoder::new();
 
+        decoder.stats = STATS.is_present();
         decoder.parse_mpeg(path.to_str().unwrap(), &mut PersistFrames::new())?;
     } else {
         gflags::print_help_and_exit(0);
