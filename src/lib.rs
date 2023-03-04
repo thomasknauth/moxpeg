@@ -1057,84 +1057,6 @@ fn advance_to_next_start_code<F: Read + Seek>(f: &mut BufReader<F>) -> io::Resul
     }
 }
 
-fn parse_picture<T: Read + Seek>(f: &mut std::io::BufReader<T>, seqhdr: &SequenceHeader) -> io::Result<Frame> {
-
-    let start = Instant::now();
-
-    let mut buf: [u8; 4] = [0; 4];
-
-    f.read_exact(&mut buf)?;
-    assert!(is_start_code(&buf, PICTURE_START_VALUE));
-
-    trace!("Picture start code at offset {}.",
-           f.stream_position().unwrap() - 4);
-
-    let hdr = PictureHeader::new(f).unwrap();
-    trace!("seq nr: {}, frame type: {}", hdr.sequence_nr(), hdr.frame_type());
-
-    if hdr.frame_type() != FRAME_TYPE_I {
-
-        let frame_type = if hdr.frame_type() == FRAME_TYPE_I {
-            "I-frame" } else { "non-I-frame" };
-        trace!("Skipping {} @ offset {}", frame_type, f.stream_position().unwrap());
-
-        loop {
-            let start_code = next_start_code(f)?;
-            if start_code == GROUP_OF_PICTURES_START_VALUE ||
-                start_code == SEQUENCE_HEADER_START_VALUE ||
-                start_code == 0 {
-                    // Somehow return and continue regular control
-                    // flow in caller.  This is not an error but we
-                    // also cannot return a valid frame.
-                    //
-                    // The control flow should be cleaner once we
-                    // support P frames too.
-                    return Ok(Frame::new_dummy());
-                }
-            f.seek_relative(4)?;
-        }
-    }
-
-    // Skip extensions and user data
-    let mut start_code = next_start_code(f)?;
-    loop {
-        if !(start_code == START_EXTENSION ||
-             start_code == START_USER_DATA) {
-            assert!(start_code >= 0x01 && start_code <= 0xAF);
-            // f.seek_relative(-4);
-            break;
-        }
-        start_code = next_start_code(f)?;
-    }
-
-    let mut container = Container::new(seqhdr.hsize(), seqhdr.vsize());
-
-    loop {
-        container.parse_slice(f, start_code).unwrap();
-
-        f.read_exact(&mut buf)?;
-        f.seek_relative(-4)?;
-
-        if !is_slice_start_code(&buf) {
-            break;
-        }
-        start_code = buf[3];
-    }
-
-    trace!("frame.y={:x?}", &container.frame.y.data[0..16]);
-    trace!("frame.y={:x?}", &container.frame.y.data[container.frame.y.data.len()-32..]);
-    trace!("frame.cr={:x?}", &container.frame.cr.data[0..16]);
-    trace!("frame.cb={:x?}", &container.frame.cb.data[0..16]);
-
-    let duration = start.elapsed();
-
-    if PROFILE {
-        println!("parse_picture() took {:?}", duration);
-    }
-
-    return Ok(container.frame);
-}
-
 /**
  * @param b: buffer with RGB pixel values
  */
@@ -1191,77 +1113,6 @@ fn next_start_code<T: Read+Seek>(r: &mut std::io::BufReader<T>) -> io::Result<u8
         }
     }
 }
-
-pub fn parse_mpeg<T: FrameProcessor>(path: &str, frame_handler: &mut T) -> io::Result<()> {
-
-    let mut f = OpenOptions::new()
-        .read(true)
-        .open(path).expect("Unable to open file");
-    let mut vidstream = MpegVideoStream::new(&mut f);
-    let mut reader = io::BufReader::new(&mut vidstream);
-
-    let mut buf: [u8; 4] = [0; 4];
-
-    let mut seqhdr: Option<SequenceHeader> = None;
-
-    loop {
-
-        reader.read_exact(&mut buf)?;
-
-        if is_start_code(&buf, SEQUENCE_HEADER_START_VALUE) {
-
-                trace!("Sequence start code at offset {}.",
-                       reader.stream_position().unwrap() - 4);
-
-                seqhdr = Some(SequenceHeader::new(&mut reader));
-
-                trace!("width: {}", seqhdr.as_ref().unwrap().hsize());
-                trace!("height: {}", seqhdr.as_ref().unwrap().vsize());
-                trace!("aspect ratio: {}", seqhdr.as_ref().unwrap().aspect_ratio_str());
-                trace!("frame rate: {}", seqhdr.as_ref().unwrap().frame_rate());
-
-        } else if is_start_code(&buf, GROUP_OF_PICTURES_START_VALUE) {
-
-                trace!("Group of Pictures start code at offset {}.",
-                       reader.stream_position().unwrap() - 4);
-
-                let mut count = 0;
-                let hdr = GroupOfPictures::new(&mut reader).unwrap();
-
-                trace!("hour: {} minute: {} sec: {} frame: {}", hdr.hour(), hdr.min(), hdr.sec(), hdr.frame());
-
-                loop {
-                    count += 1;
-
-                    match parse_picture(&mut reader, &seqhdr.as_ref().unwrap()) {
-                        Err(e) => match e.kind() {
-                            std::io::ErrorKind::UnexpectedEof => return Ok(()),
-                            _ => return Err(e)
-                        },
-
-                        Ok(frame) => {
-
-                            if frame.width > 0 && frame.height > 0 {
-                                frame_handler.process(&frame);
-                            }
-                            ()
-                        }
-                    }
-
-                    reader.read_exact(&mut buf)?;
-                    reader.seek_relative(-4)?;
-
-                    if !is_start_code(&buf, PICTURE_START_VALUE) {
-                        break;
-                    }
-                }
-                trace!("{} pictures in group.", count);
-        } else {
-            reader.seek_relative(-3)?;
-        }
-    }
-}
-
 
 fn plm_video_idct(block: &mut [i32; 64]) {
 
@@ -1328,6 +1179,183 @@ fn plm_video_idct(block: &mut [i32; 64]) {
 	}
 }
 
+pub struct MpegDecoder {
+    pub stats: bool,
+    parse_picture_durations: Vec<std::time::Duration>
+}
+
+impl MpegDecoder {
+
+    pub fn new() -> Self {
+        MpegDecoder {stats: false, parse_picture_durations: vec![]}
+    }
+
+    pub fn parse_mpeg<T: FrameProcessor>(&mut self, path: &str, frame_handler: &mut T) -> io::Result<()> {
+
+        let mut f = OpenOptions::new()
+            .read(true)
+            .open(path).expect("Unable to open file");
+        let mut vidstream = MpegVideoStream::new(&mut f);
+        let mut reader = io::BufReader::new(&mut vidstream);
+
+        let mut buf: [u8; 4] = [0; 4];
+
+        let mut seqhdr: Option<SequenceHeader> = None;
+
+        loop {
+
+            match reader.read_exact(&mut buf) {
+                Ok(_) => {},
+                Err(e) => match e.kind() {
+                    std::io::ErrorKind::UnexpectedEof => break,
+                    _ => return Err(e)
+                },
+            }
+
+            if is_start_code(&buf, SEQUENCE_HEADER_START_VALUE) {
+
+                trace!("Sequence start code at offset {}.",
+                       reader.stream_position().unwrap() - 4);
+
+                seqhdr = Some(SequenceHeader::new(&mut reader));
+
+                trace!("width: {}", seqhdr.as_ref().unwrap().hsize());
+                trace!("height: {}", seqhdr.as_ref().unwrap().vsize());
+                trace!("aspect ratio: {}", seqhdr.as_ref().unwrap().aspect_ratio_str());
+                trace!("frame rate: {}", seqhdr.as_ref().unwrap().frame_rate());
+
+            } else if is_start_code(&buf, GROUP_OF_PICTURES_START_VALUE) {
+
+                trace!("Group of Pictures start code at offset {}.",
+                       reader.stream_position().unwrap() - 4);
+
+                let mut count = 0;
+                let hdr = GroupOfPictures::new(&mut reader).unwrap();
+
+                trace!("hour: {} minute: {} sec: {} frame: {}", hdr.hour(), hdr.min(), hdr.sec(), hdr.frame());
+
+                loop {
+                    count += 1;
+
+                    let start = Instant::now();
+
+                    match self.parse_picture(&mut reader, &seqhdr.as_ref().unwrap()) {
+                        Err(e) => match e.kind() {
+                            std::io::ErrorKind::UnexpectedEof => break,
+                            _ => return Err(e)
+                        },
+
+                        Ok(frame) => {
+
+                            if frame.width > 0 && frame.height > 0 {
+
+                                if self.stats {
+                                    self.parse_picture_durations.push(start.elapsed());
+                                }
+
+                                frame_handler.process(&frame);
+                            }
+                            ()
+                        }
+                    }
+
+                    reader.read_exact(&mut buf)?;
+                    reader.seek_relative(-4)?;
+
+                    if !is_start_code(&buf, PICTURE_START_VALUE) {
+                        break;
+                    }
+                }
+                trace!("{} pictures in group.", count);
+            } else {
+                reader.seek_relative(-3)?;
+            }
+        }
+
+        if self.stats {
+            self.parse_picture_durations.sort();
+            println!("len={},min={:?},p50={:?},p95={:?},p99={:?},max={:?}",
+                     self.parse_picture_durations.len(),
+                     self.parse_picture_durations[0],
+                     self.parse_picture_durations[self.parse_picture_durations.len()/2],
+                     self.parse_picture_durations[(self.parse_picture_durations.len()*95)/100],
+                     self.parse_picture_durations[(self.parse_picture_durations.len()*99)/100],
+                     self.parse_picture_durations[self.parse_picture_durations.len()-1]);
+        };
+        Ok(())
+    }
+
+    fn parse_picture<T: Read + Seek>(&self, f: &mut std::io::BufReader<T>, seqhdr: &SequenceHeader) -> io::Result<Frame> {
+
+        let mut buf: [u8; 4] = [0; 4];
+
+        f.read_exact(&mut buf)?;
+        assert!(is_start_code(&buf, PICTURE_START_VALUE));
+
+        trace!("Picture start code at offset {}.",
+               f.stream_position().unwrap() - 4);
+
+        let hdr = PictureHeader::new(f).unwrap();
+        trace!("seq nr: {}, frame type: {}", hdr.sequence_nr(), hdr.frame_type());
+
+        if hdr.frame_type() != FRAME_TYPE_I {
+
+            let frame_type = if hdr.frame_type() == FRAME_TYPE_I {
+                "I-frame" } else { "non-I-frame" };
+            trace!("Skipping {} @ offset {}", frame_type, f.stream_position().unwrap());
+
+            loop {
+                let start_code = next_start_code(f)?;
+                if start_code == GROUP_OF_PICTURES_START_VALUE ||
+                    start_code == SEQUENCE_HEADER_START_VALUE ||
+                    start_code == 0 {
+                        // Somehow return and continue regular control
+                        // flow in caller.  This is not an error but we
+                        // also cannot return a valid frame.
+                        //
+                        // The control flow should be cleaner once we
+                        // support P frames too.
+                        return Ok(Frame::new_dummy());
+                    }
+                f.seek_relative(4)?;
+            }
+        }
+
+        // Skip extensions and user data
+        let mut start_code = next_start_code(f)?;
+        loop {
+            if !(start_code == START_EXTENSION ||
+                 start_code == START_USER_DATA) {
+                assert!(start_code >= 0x01 && start_code <= 0xAF);
+                // f.seek_relative(-4);
+                break;
+            }
+            start_code = next_start_code(f)?;
+        }
+
+        let mut container = Container::new(seqhdr.hsize(), seqhdr.vsize());
+
+        loop {
+            container.parse_slice(f, start_code).unwrap();
+
+            f.read_exact(&mut buf)?;
+            f.seek_relative(-4)?;
+
+            if !is_slice_start_code(&buf) {
+                break;
+            }
+            start_code = buf[3];
+        }
+
+        trace!("frame.y={:x?}", &container.frame.y.data[0..16]);
+        trace!("frame.y={:x?}", &container.frame.y.data[container.frame.y.data.len()-32..]);
+        trace!("frame.cr={:x?}", &container.frame.cr.data[0..16]);
+        trace!("frame.cb={:x?}", &container.frame.cb.data[0..16]);
+
+        return Ok(container.frame);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1341,8 +1369,9 @@ mod tests {
     fn end_to_end() {
         let fns = vec!["tests/sample_960x400_ocean_with_audio.mpeg",
                        "tests/bjork-all-is-full-of-love.mpg"];
+        let mut decoder = MpegDecoder::new();
         for filename in fns.iter() {
-            parse_mpeg(filename, &mut NoopFrameProcessor {}).unwrap();
+            decoder.parse_mpeg(filename, &mut NoopFrameProcessor {}).unwrap();
         }
     }
 
@@ -1434,7 +1463,8 @@ mod tests {
         let cursor = io::Cursor::new(buf);
         let mut reader = io::BufReader::new(cursor);
         let seqhdr = SequenceHeader::new(&mut reader);
-        parse_picture(&mut reader, &seqhdr).unwrap();
+        let decoder = MpegDecoder::new();
+        decoder.parse_picture(&mut reader, &seqhdr).unwrap();
     }
 
     #[test]

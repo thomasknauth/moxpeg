@@ -1,4 +1,4 @@
-use mpeg_ox::{parse_mpeg, PersistFrames};
+use mpeg_ox::{MpegDecoder, PersistFrames};
 
 use gflags;
 use std::io;
@@ -19,7 +19,9 @@ fn main() -> io::Result<()> {
 
     if FILE.is_present() {
         let path = FILE.flag;
-        parse_mpeg(path.to_str().unwrap(), &mut PersistFrames::new())?;
+        let mut decoder = MpegDecoder::new();
+
+        decoder.parse_mpeg(path.to_str().unwrap(), &mut PersistFrames::new())?;
     } else {
         gflags::print_help_and_exit(0);
     }
