@@ -11,6 +11,7 @@
 
 mod stream;
 mod idct_23002_2;
+mod bmp;
 
 use bitstream_io::BitRead;
 use std::io;
@@ -616,15 +617,15 @@ impl Frame {
         }
     }
 
-    fn put_pixel(&self, dest: &mut Vec<u8>, d_index: i32, y_index: i32, r: i32, g: i32, b: i32, y_offset: i32, dest_offset: i32) {
+    fn put_pixel(&self, dest: &mut Vec<u8>, d_index: i32, y_index: i32, rgb: (i32, i32, i32), y_offset: i32, dest_offset: i32) {
         let red_idx = 0;
         let green_idx = 1;
         let blue_idx = 2;
         let idx: usize = (i32::from(y_index) + y_offset).try_into().unwrap();
 	      let y: i32 = ((i32::from(self.y.data[idx])-16) * 76309) >> 16;
-	      dest[usize::try_from(d_index + dest_offset + red_idx).unwrap()] = clamp(y + r);
-	      dest[usize::try_from(d_index + dest_offset + green_idx).unwrap()] = clamp(y - g);
-	      dest[usize::try_from(d_index + dest_offset + blue_idx).unwrap()] = clamp(y + b);
+	      dest[usize::try_from(d_index + dest_offset + red_idx).unwrap()] = clamp(y + rgb.0);
+	      dest[usize::try_from(d_index + dest_offset + green_idx).unwrap()] = clamp(y - rgb.1);
+	      dest[usize::try_from(d_index + dest_offset + blue_idx).unwrap()] = clamp(y + rgb.2);
 
         // print!("{} {} {} {}, ", usize::try_from(d_index + dest_offset + red_idx).unwrap(),
         //        dest[usize::try_from(d_index + dest_offset + red_idx).unwrap()],
@@ -632,9 +633,13 @@ impl Frame {
         //        dest[usize::try_from(d_index + dest_offset + blue_idx).unwrap()]);
     }
 
-    // Convert a frame from YCrCb to RGB.
-    // Modeled after PLM_DEFINE_FRAME_CONVERT_FUNCTION from pl_mpeg.
     fn to_rgb(&self) -> Vec<u8> {
+        unimplemented!();
+    }
+
+    // Convert a frame from YCrCb to BGR.
+    // Modeled after PLM_DEFINE_FRAME_CONVERT_FUNCTION from pl_mpeg.
+    fn to_bgr(&self) -> Vec<u8> {
 
         let start = Instant::now();
 
@@ -661,10 +666,10 @@ impl Frame {
 				        let r: i32 = (cr * 104597) >> 16;
 				        let g: i32 = (cb * 25674 + cr * 53278) >> 16;
 				        let b: i32 = (cb * 132201) >> 16;
-				        self.put_pixel(&mut dest, d_index, y_index, r, g, b, 0, 0);
-				        self.put_pixel(&mut dest, d_index, y_index, r, g, b, 1, bytes_per_pixel.into());
-				        self.put_pixel(&mut dest, d_index, y_index, r, g, b, yw.into(), stride.into());
-				        self.put_pixel(&mut dest, d_index, y_index, r, g, b, (yw + 1).into(),
+				        self.put_pixel(&mut dest, d_index, y_index, (b, g, r), 0, 0);
+				        self.put_pixel(&mut dest, d_index, y_index, (b, g, r), 1, bytes_per_pixel.into());
+				        self.put_pixel(&mut dest, d_index, y_index, (b, g, r), yw.into(), stride.into());
+				        self.put_pixel(&mut dest, d_index, y_index, (b, g, r), (yw + 1).into(),
                                (stride + bytes_per_pixel).into());
                 // println!("");
 		            c_index += 1;
@@ -760,10 +765,10 @@ pub struct PersistFrames {
 }
 
 impl FrameProcessor for PersistFrames {
-    /// Writes a frame in PPM format to a file.
+    /// Writes a frame to a file.
     fn process(&mut self, frame: &Frame) {
         let mut fname: String = String::new();
-        write!(fname, "{:06}.ppm", self.frame_count).unwrap();
+        write!(fname, "{:06}.bmp", self.frame_count).unwrap();
 
         let f = OpenOptions::new()
             .write(true)
@@ -771,7 +776,8 @@ impl FrameProcessor for PersistFrames {
             .open(fname).unwrap();
         let mut writer = io::BufWriter::new(f);
 
-        write_ppm(frame, &mut writer).unwrap();
+        let bmp = bmp::BmpImage {};
+        bmp.write(frame.width.into(), frame.height.into(), &frame.to_bgr(), &mut writer);
         self.frame_count += 1;
     }
 }
