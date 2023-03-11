@@ -691,13 +691,14 @@ impl Frame {
 // #define PLM_BLOCK_SET(DEST, DEST_INDEX, DEST_WIDTH, SOURCE_INDEX, SOURCE_WIDTH, BLOCK_SIZE, OP) do { \
 // 	}} while(FALSE)
 
-fn block_set(dest: &mut Vec<u8>,
-                    mut dest_idx: usize,
-                    dest_width: usize,
-                    source_idx: usize,
-                    source_width: usize,
-                    block_size: usize,
-                    op: &[u8; 64])
+fn block_set<F>(dest: &mut Vec<u8>,
+             mut dest_idx: usize,
+             dest_width: usize,
+             source_idx: usize,
+             source_width: usize,
+             block_size: usize,
+             f: F)
+    where F: Fn(usize) -> u8
 {
     trace!("block_set={} {} {} {}", dest_idx, dest_width, source_idx, source_width);
 
@@ -708,7 +709,7 @@ fn block_set(dest: &mut Vec<u8>,
 	  for _y in 0..block_size {
 		    for _x in 0..block_size {
             // print!("{}={} ", dest_idx, op[source_idx]);
-			      dest[dest_idx] = op[source_idx];
+			      dest[dest_idx] = f(source_idx);
 			      source_idx += 1;
             dest_idx += 1;
 		    }
@@ -1024,16 +1025,18 @@ impl Container {
                 if n == 1 {
                     let clamped = clamp((block_data[0] + 128) >> 8);
                     block_set(&mut d, di.try_into().unwrap(), dw.into(),
-                              0, 8, 8, &[clamped; 64]);
+                              // 0, 8, 8, &[clamped; 64]);
+                              0, 8, 8, |i| clamped);
                     block_data[0] = 0;
                 } else {
                     plm_video_idct(&mut block_data);
-                    let mut clamped = [0u8; 64];
-                    for n in 0..64 {
-                        clamped[n] = clamp(block_data[n]);
-                    }
+                    // let mut clamped = [0u8; 64];
+                    // for n in 0..64 {
+                    //     clamped[n] = clamp(block_data[n]);
+                    // }
                     block_set(&mut d, di.try_into().unwrap(), dw.into(),
-                              0, 8, 8, &clamped);
+                              0, 8, 8, |i| clamp(block_data[i]));
+                              // 0, 8, 8, &clamped);
                 }
             } else {
                 // Can only do I frames
