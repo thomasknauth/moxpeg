@@ -9,21 +9,21 @@
 
 // https://github.com/phoboslab/pl_mpeg
 
-mod stream;
-mod idct_23002_2;
 mod bmp;
+mod idct_23002_2;
+mod stream;
 
 use bitstream_io::BitRead;
-use std::io;
-use std::io::{BufReader, Seek, Read, SeekFrom};
-use std::io::Write;
 use std::fmt::Write as FmtWrite;
 use std::fs::OpenOptions;
-use std::time::{Instant};
+use std::io;
+use std::io::Write;
+use std::io::{BufReader, Read, Seek, SeekFrom};
+use std::time::Instant;
 use stream::MpegVideoStream;
 
 extern crate log;
-use log::{trace};
+use log::trace;
 
 const PROFILE: bool = false;
 
@@ -43,6 +43,7 @@ const START_USER_DATA: u8 = 0xB2;
 const FRAME_TYPE_I: u8 = 0b001;
 const FRAME_TYPE_P: u8 = 0b010;
 
+#[rustfmt::skip]
 const VIDEO_INTRA_QUANT_MATRIX: [u8; 64] = [
 	 8, 16, 19, 22, 26, 27, 29, 34,
 	16, 16, 22, 24, 27, 29, 34, 37,
@@ -54,6 +55,7 @@ const VIDEO_INTRA_QUANT_MATRIX: [u8; 64] = [
 	27, 29, 35, 38, 46, 56, 69, 83
 ];
 
+#[rustfmt::skip]
 const VIDEO_PREMULTIPLIER_MATRIX: [i32; 64] = [
 	  32, 44, 42, 38, 32, 25, 17,  9,
 	  44, 62, 58, 52, 44, 35, 24, 12,
@@ -68,7 +70,7 @@ const VIDEO_PREMULTIPLIER_MATRIX: [i32; 64] = [
 const _: [u8; 8] = [0; std::mem::size_of::<SequenceHeader>()];
 
 struct SequenceHeader {
-    raw: [u8; 8]
+    raw: [u8; 8],
 }
 
 impl SequenceHeader {
@@ -82,40 +84,43 @@ impl SequenceHeader {
     }
 
     fn hsize(&self) -> u16 {
-         (u16::from(self.raw[0]) << 4) + (u16::from(self.raw[1] & 0xF0) >> 4)
+        (u16::from(self.raw[0]) << 4) + (u16::from(self.raw[1] & 0xF0) >> 4)
     }
     fn vsize(&self) -> u16 {
         (((self.raw[1] & 0x0F) as u16) << 8) + self.raw[2] as u16
     }
     fn aspect_ratio_str(&self) -> &str {
         let idx = (self.raw[3] & 0xF0) >> 4;
-        let table: [&str; 5] = [
-            "", "1:1", "4:3", "16:9", "2.21:1"
-        ];
+        let table: [&str; 5] = ["", "1:1", "4:3", "16:9", "2.21:1"];
         table[idx as usize]
     }
     fn frame_rate(&self) -> f32 {
         let idx = self.raw[3] & 0x0F;
         let table: [f32; 9] = [
-            0.0, 24000./1001., 24.0, 25.0, 29.97, 30.0, 50.0, 59.94, 60.0];
+            0.0,
+            24000. / 1001.,
+            24.0,
+            25.0,
+            29.97,
+            30.0,
+            50.0,
+            59.94,
+            60.0,
+        ];
         table[idx as usize]
     }
 }
 
 struct GroupOfPictures {
-    raw: [u8; 4]
+    raw: [u8; 4],
 }
 
 impl GroupOfPictures {
     fn new<F: std::io::Read>(f: &mut F) -> Option<GroupOfPictures> {
         let mut buf: [u8; 4] = [0; 4];
         match f.read_exact(&mut buf) {
-            Ok(()) => {
-                Some(GroupOfPictures {
-                    raw: buf,
-                })
-            },
-            Err(_) => None
+            Ok(()) => Some(GroupOfPictures { raw: buf }),
+            Err(_) => None,
         }
     }
 
@@ -138,20 +143,15 @@ impl GroupOfPictures {
 }
 
 struct PictureHeader {
-    raw: [u8; 4]
+    raw: [u8; 4],
 }
 
 impl PictureHeader {
-
     fn new<F: std::io::Read>(f: &mut F) -> Option<PictureHeader> {
         let mut buf: [u8; 4] = [0; 4];
         match f.read_exact(&mut buf) {
-            Ok(()) => {
-                Some(PictureHeader {
-                    raw: buf,
-                })
-            },
-            Err(_) => None
+            Ok(()) => Some(PictureHeader { raw: buf }),
+            Err(_) => None,
         }
     }
 
@@ -168,10 +168,10 @@ fn is_slice_start_code(b: &[u8; 4]) -> bool {
     b[0] == 0x0 && b[1] == 0x0 && b[2] == 0x01 && b[3] >= 0x01 && b[3] <= 0xAF
 }
 
-type MyBitReader<'a, T> = bitstream_io::BitReader<&'a mut std::io::BufReader<T>, bitstream_io::BigEndian>;
+type MyBitReader<'a, T> =
+    bitstream_io::BitReader<&'a mut std::io::BufReader<T>, bitstream_io::BigEndian>;
 
 fn parse_macroblock_type<T: std::io::Read>(bs: &mut MyBitReader<T>) -> Option<u8> {
-
     if bs.read::<u8>(1).unwrap() == 1 {
         // I-frame/picture
         return Some(0b1_0000);
@@ -189,6 +189,7 @@ fn parse_macroblock_type<T: std::io::Read>(bs: &mut MyBitReader<T>) -> Option<u8
 //     None
 // }
 
+#[rustfmt::skip]
 const VIDEO_ZIG_ZAG: [u8; 64] = [
 	 0,  1,  8, 16,  9,  2,  3, 10,
 	17, 24, 32, 25, 18, 11,  4,  5,
@@ -200,6 +201,7 @@ const VIDEO_ZIG_ZAG: [u8; 64] = [
 	53, 60, 61, 54, 47, 55, 62, 63
 ];
 
+#[rustfmt::skip]
 const VIDEO_DCT_SIZE_LUMINANCE: [(i16, i16); 18] = [
 	(  1 << 1,    0), (  2 << 1,    0),  //   0: x
 	(       0,    1), (       0,    2),  //   1: 0x
@@ -212,6 +214,7 @@ const VIDEO_DCT_SIZE_LUMINANCE: [(i16, i16); 18] = [
 	(       0,    8), (      -1,    0),  //   8: 1111 11x
 ];
 
+#[rustfmt::skip]
 const VIDEO_DCT_SIZE_CHROMINANCE: [(i16, i16); 18] = [
 	(  1 << 1,    0), (  2 << 1,    0),  //   0: x
 	(       0,    0), (       0,    1),  //   1: 0x
@@ -225,7 +228,7 @@ const VIDEO_DCT_SIZE_CHROMINANCE: [(i16, i16); 18] = [
 ];
 
 //  Decoded values are unsigned. Sign bit follows in the stream.
-
+#[rustfmt::skip]
 const VIDEO_DCT_COEFF: [(i16, u16); 224] = [
 	(  1 << 1,        0), (       0,   0x0001),  //   0: x
 	(  2 << 1,        0), (  3 << 1,        0),  //   1: 0x
@@ -342,6 +345,7 @@ const VIDEO_DCT_COEFF: [(i16, u16); 224] = [
 ];
 
 // Why do some offset have an index of -1, while others are 0?
+#[rustfmt::skip]
 const VIDEO_MACROBLOCK_ADDRESS_INCREMENT: [(i16, i16); 80] = [
 	(  1 << 1,    0), (       0,    1),  //   0: x
 	(  2 << 1,    0), (  3 << 1,    0),  //   1: 0x
@@ -388,7 +392,7 @@ const VIDEO_MACROBLOCK_ADDRESS_INCREMENT: [(i16, i16); 80] = [
 fn read_huffman<T, S>(table: &[(i16, S)], stream: &mut MyBitReader<T>) -> Option<S>
 where
     T: Read,
-    S: bitstream_io::Numeric
+    S: bitstream_io::Numeric,
 {
     let mut state: (i16, S) = (0, S::default());
 
@@ -402,10 +406,13 @@ where
     Some(state.1)
 }
 
-fn parse_dct_dc_size<T: std::io::Read>(table: &[(i16, i16); 18], bs: &mut MyBitReader<T>) -> Option<u8> {
+fn parse_dct_dc_size<T: std::io::Read>(
+    table: &[(i16, i16); 18],
+    bs: &mut MyBitReader<T>,
+) -> Option<u8> {
     match read_huffman(table, bs) {
         Some(i) => Some(u8::try_from(i).unwrap()),
-        None => None
+        None => None,
     }
 }
 
@@ -413,7 +420,7 @@ fn parse_dct_dc_size<T: std::io::Read>(table: &[(i16, i16); 18], bs: &mut MyBitR
 struct Plane {
     width: u16,
     height: u16,
-    data: Vec<u8>
+    data: Vec<u8>,
 }
 
 impl Plane {
@@ -421,38 +428,35 @@ impl Plane {
         Plane {
             width: w,
             height: h,
-            data: vec![0; (i32::from(w)*i32::from(h)).try_into().unwrap()]
+            data: vec![0; (i32::from(w) * i32::from(h)).try_into().unwrap()],
         }
     }
 }
 
 struct Pack {
-    data: [u8; 8]
+    data: [u8; 8],
 }
 
 impl Pack {
     fn parse<F: Read>(f: &mut F) -> io::Result<Self> {
-        let mut ret = Pack {
-            data: [0; 8]
-        };
+        let mut ret = Pack { data: [0; 8] };
         f.read_exact(&mut ret.data)?;
         Ok(ret)
     }
 }
 
 struct SystemHeader {
-    data: Vec<u8>
+    data: Vec<u8>,
 }
 
 impl SystemHeader {
     fn parse<F: Read>(f: &mut F) -> io::Result<Self> {
-
         let mut buf = [0; 2];
         f.read_exact(&mut buf)?;
         let hdr_len = u16::from_be_bytes(buf);
 
         let mut ret = Self {
-            data: vec![0; hdr_len.into()]
+            data: vec![0; hdr_len.into()],
         };
 
         f.read_exact(&mut ret.data.as_mut_slice())?;
@@ -474,15 +478,18 @@ fn is_packet_start_code(b: &[u8; 4]) -> bool {
 }
 
 struct Packet {
-    data: Vec<u8>
+    data: Vec<u8>,
 }
 
 impl Packet {
-
-    fn parse<F: Read+Seek>(f: &mut F, stream_id: u8) -> io::Result<Self> {
-
+    fn parse<F: Read + Seek>(f: &mut F, stream_id: u8) -> io::Result<Self> {
         let offset = f.stream_position().unwrap();
-        trace!("stream id=0x{:x} at offset {}(0x{:x})", stream_id, offset, offset);
+        trace!(
+            "stream id=0x{:x} at offset {}(0x{:x})",
+            stream_id,
+            offset,
+            offset
+        );
 
         let mut packet_len_buf = [0; 2];
         f.read_exact(&mut packet_len_buf)?;
@@ -520,11 +527,13 @@ impl Packet {
 
         trace!("packet header len={}", idx);
 
-        Ok(Packet {data: data[idx..].to_vec()})
+        Ok(Packet {
+            data: data[idx..].to_vec(),
+        })
     }
 }
 
-fn parse_pack<F: Read+Seek>(f: &mut F, data: &mut Vec<u8>) -> io::Result<()> {
+fn parse_pack<F: Read + Seek>(f: &mut F, data: &mut Vec<u8>) -> io::Result<()> {
     Pack::parse(f)?;
 
     let mut buf = [0; 4];
@@ -537,13 +546,12 @@ fn parse_pack<F: Read+Seek>(f: &mut F, data: &mut Vec<u8>) -> io::Result<()> {
     }
 
     loop {
-
         match f.read_exact(&mut buf) {
             Err(e) => match e.kind() {
                 std::io::ErrorKind::UnexpectedEof => return Ok(()),
-                _ => return Err(e)
+                _ => return Err(e),
             },
-            _ => {},
+            _ => {}
         };
 
         if !is_packet_start_code(&buf) {
@@ -554,7 +562,6 @@ fn parse_pack<F: Read+Seek>(f: &mut F, data: &mut Vec<u8>) -> io::Result<()> {
         let packet = Packet::parse(f, buf[3])?;
 
         if buf[3] == VIDEO_STREAM_0_START_CODE {
-
             data.extend_from_slice(&packet.data);
         }
     }
@@ -563,15 +570,15 @@ fn parse_pack<F: Read+Seek>(f: &mut F, data: &mut Vec<u8>) -> io::Result<()> {
 }
 
 /// Read pack payloads an iso11172 stream into `data`..
-pub fn iso11172_stream<F: Read+Seek>(f: &mut F, data: &mut Vec<u8>) -> io::Result<()> {
+pub fn iso11172_stream<F: Read + Seek>(f: &mut F, data: &mut Vec<u8>) -> io::Result<()> {
     loop {
         let mut buf = [0; 4];
         match f.read_exact(&mut buf) {
             Err(e) => match e.kind() {
                 std::io::ErrorKind::UnexpectedEof => return Ok(()),
-                _ => return Err(e)
+                _ => return Err(e),
             },
-            _ => {},
+            _ => {}
         }
 
         if !is_start_code(&buf, PACK_START_CODE) {
@@ -587,17 +594,15 @@ pub struct Frame {
     height: u16,
     y: Plane,
     cr: Plane,
-    cb: Plane
+    cb: Plane,
 }
 
 impl Frame {
-
     fn new_dummy() -> Frame {
-        Frame::new(0,0)
+        Frame::new(0, 0)
     }
 
     fn new(w: u16, h: u16) -> Frame {
-
         let macroblock_width = (w + 15) / 16;
         let macroblock_height = (h + 15) / 16;
 
@@ -606,26 +611,31 @@ impl Frame {
             height: h,
 
             // * 16 because there are 16 pixel per macroblock.
-            y: Plane::new(macroblock_width * 16,
-                          macroblock_height * 16),
+            y: Plane::new(macroblock_width * 16, macroblock_height * 16),
             // * 8 because there are only half as manychrominance
             // pixels as luminance pixels.
-            cr: Plane::new(macroblock_width * 8,
-                           macroblock_height * 8),
-            cb: Plane::new(macroblock_width * 8,
-                           macroblock_height * 8)
+            cr: Plane::new(macroblock_width * 8, macroblock_height * 8),
+            cb: Plane::new(macroblock_width * 8, macroblock_height * 8),
         }
     }
 
-    fn put_pixel(&self, dest: &mut Vec<u8>, d_index: i32, y_index: i32, rgb: (i32, i32, i32), y_offset: i32, dest_offset: i32) {
+    fn put_pixel(
+        &self,
+        dest: &mut Vec<u8>,
+        d_index: i32,
+        y_index: i32,
+        rgb: (i32, i32, i32),
+        y_offset: i32,
+        dest_offset: i32,
+    ) {
         let red_idx = 0;
         let green_idx = 1;
         let blue_idx = 2;
         let idx: usize = (i32::from(y_index) + y_offset).try_into().unwrap();
-	      let y: i32 = ((i32::from(self.y.data[idx])-16) * 76309) >> 16;
-	      dest[usize::try_from(d_index + dest_offset + red_idx).unwrap()] = clamp(y + rgb.0);
-	      dest[usize::try_from(d_index + dest_offset + green_idx).unwrap()] = clamp(y - rgb.1);
-	      dest[usize::try_from(d_index + dest_offset + blue_idx).unwrap()] = clamp(y + rgb.2);
+        let y: i32 = ((i32::from(self.y.data[idx]) - 16) * 76309) >> 16;
+        dest[usize::try_from(d_index + dest_offset + red_idx).unwrap()] = clamp(y + rgb.0);
+        dest[usize::try_from(d_index + dest_offset + green_idx).unwrap()] = clamp(y - rgb.1);
+        dest[usize::try_from(d_index + dest_offset + blue_idx).unwrap()] = clamp(y + rgb.2);
 
         // print!("{} {} {} {}, ", usize::try_from(d_index + dest_offset + red_idx).unwrap(),
         //        dest[usize::try_from(d_index + dest_offset + red_idx).unwrap()],
@@ -640,41 +650,64 @@ impl Frame {
     // Convert a frame from YCrCb to BGR.
     // Modeled after PLM_DEFINE_FRAME_CONVERT_FUNCTION from pl_mpeg.
     fn to_bgr(&self) -> Vec<u8> {
-
         let start = Instant::now();
 
         let bytes_per_pixel = 3i32;
-        let mut dest = vec![0; usize::try_from(i32::from(self.width) * i32::from(self.height) * bytes_per_pixel).unwrap()];
+        let mut dest =
+            vec![
+                0;
+                usize::try_from(i32::from(self.width) * i32::from(self.height) * bytes_per_pixel)
+                    .unwrap()
+            ];
         let stride: i32 = i32::from(self.width) * bytes_per_pixel;
         // For some reason, we half the width and height here. The
         // innermost loop sets 4 pixels at a time, compensating for
         // halving the width and height.
-		    let cols: i32 = (self.width >> 1).into();
-		    let rows: i32 = (self.height >> 1).into();
-		    let yw: i32 = i32::from(self.y.width);
-		    let cw: i32 = i32::from(self.cb.width);
+        let cols: i32 = (self.width >> 1).into();
+        let rows: i32 = (self.height >> 1).into();
+        let yw: i32 = i32::from(self.y.width);
+        let cw: i32 = i32::from(self.cb.width);
 
         for row in 0..rows {
-		        let mut c_index: i32 = row * cw;
-		        let mut y_index: i32 = row * 2 * yw;
-		        let mut d_index: i32 = (row * 2 * stride).into();
+            let mut c_index: i32 = row * cw;
+            let mut y_index: i32 = row * 2 * yw;
+            let mut d_index: i32 = (row * 2 * stride).into();
 
             for _ in 0..cols {
-
-				        let cr: i32 = i32::from(self.cr.data[usize::try_from(c_index).unwrap()]) - 128;
-				        let cb: i32 = i32::from(self.cb.data[usize::try_from(c_index).unwrap()]) - 128;
-				        let r: i32 = (cr * 104597) >> 16;
-				        let g: i32 = (cb * 25674 + cr * 53278) >> 16;
-				        let b: i32 = (cb * 132201) >> 16;
-				        self.put_pixel(&mut dest, d_index, y_index, (b, g, r), 0, 0);
-				        self.put_pixel(&mut dest, d_index, y_index, (b, g, r), 1, bytes_per_pixel.into());
-				        self.put_pixel(&mut dest, d_index, y_index, (b, g, r), yw.into(), stride.into());
-				        self.put_pixel(&mut dest, d_index, y_index, (b, g, r), (yw + 1).into(),
-                               (stride + bytes_per_pixel).into());
+                let cr: i32 = i32::from(self.cr.data[usize::try_from(c_index).unwrap()]) - 128;
+                let cb: i32 = i32::from(self.cb.data[usize::try_from(c_index).unwrap()]) - 128;
+                let r: i32 = (cr * 104597) >> 16;
+                let g: i32 = (cb * 25674 + cr * 53278) >> 16;
+                let b: i32 = (cb * 132201) >> 16;
+                self.put_pixel(&mut dest, d_index, y_index, (b, g, r), 0, 0);
+                self.put_pixel(
+                    &mut dest,
+                    d_index,
+                    y_index,
+                    (b, g, r),
+                    1,
+                    bytes_per_pixel.into(),
+                );
+                self.put_pixel(
+                    &mut dest,
+                    d_index,
+                    y_index,
+                    (b, g, r),
+                    yw.into(),
+                    stride.into(),
+                );
+                self.put_pixel(
+                    &mut dest,
+                    d_index,
+                    y_index,
+                    (b, g, r),
+                    (yw + 1).into(),
+                    (stride + bytes_per_pixel).into(),
+                );
                 // println!("");
-		            c_index += 1;
-		            y_index += 2;
-		            d_index += i32::from(2 * bytes_per_pixel);
+                c_index += 1;
+                y_index += 2;
+                d_index += i32::from(2 * bytes_per_pixel);
             }
         }
 
@@ -691,30 +724,38 @@ impl Frame {
 // #define PLM_BLOCK_SET(DEST, DEST_INDEX, DEST_WIDTH, SOURCE_INDEX, SOURCE_WIDTH, BLOCK_SIZE, OP) do { \
 // 	}} while(FALSE)
 
-fn block_set<F>(dest: &mut Vec<u8>,
-             mut dest_idx: usize,
-             dest_width: usize,
-             source_idx: usize,
-             source_width: usize,
-             block_size: usize,
-             f: F)
-    where F: Fn(usize) -> u8
+fn block_set<F>(
+    dest: &mut Vec<u8>,
+    mut dest_idx: usize,
+    dest_width: usize,
+    source_idx: usize,
+    source_width: usize,
+    block_size: usize,
+    f: F,
+) where
+    F: Fn(usize) -> u8,
 {
-    trace!("block_set={} {} {} {}", dest_idx, dest_width, source_idx, source_width);
+    trace!(
+        "block_set={} {} {} {}",
+        dest_idx,
+        dest_width,
+        source_idx,
+        source_width
+    );
 
-	  let dest_scan = dest_width - block_size;
-	  let source_scan = source_width - block_size;
+    let dest_scan = dest_width - block_size;
+    let source_scan = source_width - block_size;
     let mut source_idx = 0;
 
-	  for _y in 0..block_size {
-		    for _x in 0..block_size {
+    for _y in 0..block_size {
+        for _x in 0..block_size {
             // print!("{}={} ", dest_idx, op[source_idx]);
-			      dest[dest_idx] = f(source_idx);
-			      source_idx += 1;
+            dest[dest_idx] = f(source_idx);
+            source_idx += 1;
             dest_idx += 1;
-		    }
-		    source_idx += source_scan;
-		    dest_idx += dest_scan;
+        }
+        source_idx += source_scan;
+        dest_idx += dest_scan;
     }
     // println!("");
 }
@@ -731,7 +772,7 @@ struct Container {
     height: u16,
     quantizer_scale: u8,
     dc_predictor: [i32; 3],
-    frame: Frame
+    frame: Frame,
 }
 
 #[inline(always)]
@@ -748,7 +789,7 @@ fn decode_dc_diff(coded: u8, size: u8) -> i16 {
     if coded & (1 << (size - 1)) != 0 {
         return coded.into();
     } else {
-        return (-(1i16 << size))|i16::from(coded+1)
+        return (-(1i16 << size)) | i16::from(coded + 1);
     }
 }
 
@@ -762,7 +803,7 @@ pub trait FrameProcessor {
 
 pub struct PersistFrames {
     /// Count the number of persisted frames.
-    frame_count: i32
+    frame_count: i32,
 }
 
 impl FrameProcessor for PersistFrames {
@@ -774,28 +815,29 @@ impl FrameProcessor for PersistFrames {
         let f = OpenOptions::new()
             .write(true)
             .create(true)
-            .open(fname).unwrap();
+            .open(fname)
+            .unwrap();
         let mut writer = io::BufWriter::new(f);
 
         let bmp = bmp::BmpImage {};
-        bmp.write(frame.width.into(), frame.height.into(), &frame.to_bgr(), &mut writer);
+        bmp.write(
+            frame.width.into(),
+            frame.height.into(),
+            &frame.to_bgr(),
+            &mut writer,
+        );
         self.frame_count += 1;
     }
 }
 
 impl PersistFrames {
-
     pub fn new() -> Self {
-        PersistFrames {
-            frame_count: 0
-        }
+        PersistFrames { frame_count: 0 }
     }
 }
 
 impl Container {
-
     fn new(width: u16, height: u16) -> Self {
-
         let mb_width = (i32::from(width) + 15) / 16;
         let mb_height = (i32::from(height) + 15) / 16;
 
@@ -810,15 +852,19 @@ impl Container {
             height: height,
             quantizer_scale: 0,
             dc_predictor: [128; 3],
-            frame: Frame::new(width, height)
+            frame: Frame::new(width, height),
         }
     }
 
     fn parse_slice<T>(&mut self, f: &mut std::io::BufReader<T>, slice_nr: u8) -> io::Result<()>
-    where T: std::io::Read + std::io::Seek
+    where
+        T: std::io::Read + std::io::Seek,
     {
-        trace!("Slice start code at stream offset 0x{:x} bytes. slice_nr={}.",
-                 f.stream_position().unwrap() - 4, slice_nr);
+        trace!(
+            "Slice start code at stream offset 0x{:x} bytes. slice_nr={}.",
+            f.stream_position().unwrap() - 4,
+            slice_nr
+        );
 
         f.seek(SeekFrom::Current(4))?;
 
@@ -841,7 +887,6 @@ impl Container {
         }
 
         loop {
-
             self.parse_macroblock(&mut stream, slice_nr);
 
             if self.mb_addr >= self.mb_size - 1 {
@@ -865,8 +910,11 @@ impl Container {
         Ok(())
     }
 
-    fn parse_macroblock<T: Read+Seek>(&mut self, bs: &mut MyBitReader<T>, slice: u8) -> Option<()> {
-
+    fn parse_macroblock<T: Read + Seek>(
+        &mut self,
+        bs: &mut MyBitReader<T>,
+        slice: u8,
+    ) -> Option<()> {
         let mut addr_inc = read_huffman(&VIDEO_MACROBLOCK_ADDRESS_INCREMENT, bs).unwrap();
         trace!("addr_inc={}", addr_inc);
 
@@ -884,12 +932,18 @@ impl Container {
         assert!((macro_type & 0b1_0000) != 0);
 
         self.mb_addr += i32::from(addr_inc);
-        self.mb_row   = self.mb_addr / self.mb_width;
-        self.mb_col   = self.mb_addr % self.mb_width;
+        self.mb_row = self.mb_addr / self.mb_width;
+        self.mb_col = self.mb_addr % self.mb_width;
 
-
-        trace!("mb_addr={}, mb_row={}, mb_col={}, addr_inc={}, type={}, slice_nr={}",
-               self.mb_addr, self.mb_row, self.mb_col, addr_inc, macro_type, slice);
+        trace!(
+            "mb_addr={}, mb_row={}, mb_col={}, addr_inc={}, type={}, slice_nr={}",
+            self.mb_addr,
+            self.mb_row,
+            self.mb_col,
+            addr_inc,
+            macro_type,
+            slice
+        );
 
         if (macro_type & 0b1_0000) == 1 {
             self.quantizer_scale = bs.read::<u8>(5).unwrap();
@@ -898,8 +952,7 @@ impl Container {
 
         // Ignore motion vectors and block patterns since they are irrelevant for I-frames.
 
-        for i in 0 .. 6 {
-
+        for i in 0..6 {
             let mut block_data = [0i32; 64];
             let plane_index = if i < 4 { 0 } else { i - 3 };
             let predictor = self.dc_predictor[plane_index];
@@ -911,12 +964,22 @@ impl Container {
             };
 
             let dct_size: u8 = parse_dct_dc_size(&table, bs).unwrap();
-            trace!("block={}, dct_size={}, predictor={}", i, dct_size, predictor);
+            trace!(
+                "block={}, dct_size={}, predictor={}",
+                i,
+                dct_size,
+                predictor
+            );
 
             if dct_size > 0 {
                 let dc_diff_coded = bs.read::<u8>(dct_size.into()).unwrap();
                 let dc_diff_decoded = decode_dc_diff(dc_diff_coded, dct_size);
-                trace!("block={}, dct_diff={}, decoded_diff={}", i, dc_diff_coded, dc_diff_decoded);
+                trace!(
+                    "block={}, dct_diff={}, decoded_diff={}",
+                    i,
+                    dc_diff_coded,
+                    dc_diff_decoded
+                );
                 block_data[0] = predictor + i32::from(dc_diff_decoded);
             } else {
                 block_data[0] = predictor;
@@ -974,8 +1037,10 @@ impl Container {
                     level += if level < 0 { -1 } else { 1 };
                 }
 
-                level = (level * i32::from(self.quantizer_scale) *
-                         i32::from(VIDEO_INTRA_QUANT_MATRIX[usize::from(de_zig_zagged)])) >> 4;
+                level = (level
+                    * i32::from(self.quantizer_scale)
+                    * i32::from(VIDEO_INTRA_QUANT_MATRIX[usize::from(de_zig_zagged)]))
+                    >> 4;
 
                 if (level & 1) == 0 {
                     level -= if level > 0 { 1 } else { -1 };
@@ -987,7 +1052,8 @@ impl Container {
                     level = -2048;
                 }
 
-                block_data[usize::from(de_zig_zagged)] = level * VIDEO_PREMULTIPLIER_MATRIX[usize::from(de_zig_zagged)];
+                block_data[usize::from(de_zig_zagged)] =
+                    level * VIDEO_PREMULTIPLIER_MATRIX[usize::from(de_zig_zagged)];
             }
 
             if log::log_enabled!(target: "Global", log::Level::Trace) {
@@ -1001,11 +1067,15 @@ impl Container {
             let mut d = match i {
                 4 => &mut self.frame.cb.data,
                 5 => &mut self.frame.cr.data,
-                _ => &mut self.frame.y.data
+                _ => &mut self.frame.y.data,
             };
 
             // dw ... destination width
-            let dw = if i < 4 { self.frame.y.width } else { self.frame.cr.width };
+            let dw = if i < 4 {
+                self.frame.y.width
+            } else {
+                self.frame.cr.width
+            };
 
             // di ... destination index
             let mut di;
@@ -1024,9 +1094,16 @@ impl Container {
             if macro_type & 0b1_0000 != 0 {
                 if n == 1 {
                     let clamped = clamp((block_data[0] + 128) >> 8);
-                    block_set(&mut d, di.try_into().unwrap(), dw.into(),
-                              // 0, 8, 8, &[clamped; 64]);
-                              0, 8, 8, |i| clamped);
+                    block_set(
+                        &mut d,
+                        di.try_into().unwrap(),
+                        dw.into(),
+                        // 0, 8, 8, &[clamped; 64]);
+                        0,
+                        8,
+                        8,
+                        |i| clamped,
+                    );
                     block_data[0] = 0;
                 } else {
                     plm_video_idct(&mut block_data);
@@ -1034,9 +1111,10 @@ impl Container {
                     // for n in 0..64 {
                     //     clamped[n] = clamp(block_data[n]);
                     // }
-                    block_set(&mut d, di.try_into().unwrap(), dw.into(),
-                              0, 8, 8, |i| clamp(block_data[i]));
-                              // 0, 8, 8, &clamped);
+                    block_set(&mut d, di.try_into().unwrap(), dw.into(), 0, 8, 8, |i| {
+                        clamp(block_data[i])
+                    });
+                    // 0, 8, 8, &clamped);
                 }
             } else {
                 // Can only do I frames
@@ -1052,7 +1130,6 @@ impl Container {
  * Advances stream position to next start code.
  */
 fn advance_to_next_start_code<F: Read + Seek>(f: &mut BufReader<F>) -> io::Result<()> {
-
     loop {
         let mut b = [0; 4];
         f.read_exact(&mut b)?;
@@ -1070,7 +1147,6 @@ fn advance_to_next_start_code<F: Read + Seek>(f: &mut BufReader<F>) -> io::Resul
  * @param b: buffer with RGB pixel values
  */
 fn write_ppm<W: Write>(frame: &Frame, writer: &mut W) -> io::Result<()> {
-
     let start = Instant::now();
 
     write!(writer, "P3\n")?;
@@ -1080,15 +1156,16 @@ fn write_ppm<W: Write>(frame: &Frame, writer: &mut W) -> io::Result<()> {
     let b = frame.to_rgb();
 
     for row in 0..frame.height {
-
         // let slice_start = usize::try_from(row * width * 3).unwrap();
         // let slice_end   = usize::try_from((row+1) * width * 3).unwrap();
         // let slice = &b[slice_start..slice_end];
         // let s = slice.iter().map(|val| format!("{}", val)).collect::<Vec<String>>().join(" ");
 
         for col in 0..frame.width {
-            let idx = usize::try_from(((i32::from(row) * i32::from(frame.width)) + i32::from(col)) * 3).unwrap();
-            write!(writer, "{} {} {} ", b[idx], b[idx+1], b[idx+2])?;
+            let idx =
+                usize::try_from(((i32::from(row) * i32::from(frame.width)) + i32::from(col)) * 3)
+                    .unwrap();
+            write!(writer, "{} {} {} ", b[idx], b[idx + 1], b[idx + 2])?;
         }
         write!(writer, "\n")?;
     }
@@ -1108,8 +1185,7 @@ fn write_ppm<W: Write>(frame: &Frame, writer: &mut W) -> io::Result<()> {
  * Positions the stream before the start code, i.e., reading next 4
  * byte, will result in the same start code sequence: 0x00, 0x00, 0x01, 0x??.
  */
-fn next_start_code<T: Read+Seek>(r: &mut std::io::BufReader<T>) -> io::Result<u8> {
-
+fn next_start_code<T: Read + Seek>(r: &mut std::io::BufReader<T>) -> io::Result<u8> {
     loop {
         let mut b = [0; 4];
         r.read_exact(&mut b)?;
@@ -1124,86 +1200,91 @@ fn next_start_code<T: Read+Seek>(r: &mut std::io::BufReader<T>) -> io::Result<u8
 }
 
 fn plm_video_idct(block: &mut [i32; 64]) {
+    let [mut b1, mut b3, mut b4, mut b6, mut b7, mut tmp1, mut tmp2, mut m0, mut x0, mut x1, mut x2, mut x3, mut x4, mut y3, mut y4, mut y5, mut y6, mut y7]: [i32; 18];
 
-	  let [mut b1, mut b3, mut b4, mut b6, mut b7, mut tmp1, mut tmp2, mut m0, mut x0, mut x1, mut x2, mut x3, mut x4, mut y3, mut y4, mut y5, mut y6, mut y7]: [i32; 18];
+    // Transform columns
+    for i in 0..8 {
+        b1 = block[4 * 8 + i];
+        b3 = block[2 * 8 + i] + block[6 * 8 + i];
+        b4 = block[5 * 8 + i] - block[3 * 8 + i];
+        tmp1 = block[1 * 8 + i] + block[7 * 8 + i];
+        tmp2 = block[3 * 8 + i] + block[5 * 8 + i];
+        b6 = block[1 * 8 + i] - block[7 * 8 + i];
+        b7 = tmp1 + tmp2;
+        m0 = block[0 * 8 + i];
+        x4 = ((b6 * 473 - b4 * 196 + 128) >> 8) - b7;
+        x0 = x4 - (((tmp1 - tmp2) * 362 + 128) >> 8);
+        x1 = m0 - b1;
+        x2 = (((block[2 * 8 + i] - block[6 * 8 + i]) * 362 + 128) >> 8) - b3;
+        x3 = m0 + b1;
+        y3 = x1 + x2;
+        y4 = x3 + b3;
+        y5 = x1 - x2;
+        y6 = x3 - b3;
+        y7 = -x0 - ((b4 * 473 + b6 * 196 + 128) >> 8);
+        block[0 * 8 + i] = b7 + y4;
+        block[1 * 8 + i] = x4 + y3;
+        block[2 * 8 + i] = y5 - x0;
+        block[3 * 8 + i] = y6 - y7;
+        block[4 * 8 + i] = y6 + y7;
+        block[5 * 8 + i] = x0 + y5;
+        block[6 * 8 + i] = y3 - x4;
+        block[7 * 8 + i] = y4 - b7;
+    }
 
-	// Transform columns
-	for i in 0..8 {
-		b1 = block[4 * 8 + i];
-		b3 = block[2 * 8 + i] + block[6 * 8 + i];
-		b4 = block[5 * 8 + i] - block[3 * 8 + i];
-		tmp1 = block[1 * 8 + i] + block[7 * 8 + i];
-		tmp2 = block[3 * 8 + i] + block[5 * 8 + i];
-		b6 = block[1 * 8 + i] - block[7 * 8 + i];
-		b7 = tmp1 + tmp2;
-		m0 = block[0 * 8 + i];
-		x4 = ((b6 * 473 - b4 * 196 + 128) >> 8) - b7;
-		x0 = x4 - (((tmp1 - tmp2) * 362 + 128) >> 8);
-		x1 = m0 - b1;
-		x2 = (((block[2 * 8 + i] - block[6 * 8 + i]) * 362 + 128) >> 8) - b3;
-		x3 = m0 + b1;
-		y3 = x1 + x2;
-		y4 = x3 + b3;
-		y5 = x1 - x2;
-		y6 = x3 - b3;
-		y7 = -x0 - ((b4 * 473 + b6 * 196 + 128) >> 8);
-		block[0 * 8 + i] = b7 + y4;
-		block[1 * 8 + i] = x4 + y3;
-		block[2 * 8 + i] = y5 - x0;
-		block[3 * 8 + i] = y6 - y7;
-		block[4 * 8 + i] = y6 + y7;
-		block[5 * 8 + i] = x0 + y5;
-		block[6 * 8 + i] = y3 - x4;
-		block[7 * 8 + i] = y4 - b7;
-	}
-
-	// Transform rows
-	for i in (0..64).step_by(8) {
-		b1 = block[4 + i];
-		b3 = block[2 + i] + block[6 + i];
-		b4 = block[5 + i] - block[3 + i];
-		tmp1 = block[1 + i] + block[7 + i];
-		tmp2 = block[3 + i] + block[5 + i];
-		b6 = block[1 + i] - block[7 + i];
-		b7 = tmp1 + tmp2;
-		m0 = block[0 + i];
-		x4 = ((b6 * 473 - b4 * 196 + 128) >> 8) - b7;
-		x0 = x4 - (((tmp1 - tmp2) * 362 + 128) >> 8);
-		x1 = m0 - b1;
-		x2 = (((block[2 + i] - block[6 + i]) * 362 + 128) >> 8) - b3;
-		x3 = m0 + b1;
-		y3 = x1 + x2;
-		y4 = x3 + b3;
-		y5 = x1 - x2;
-		y6 = x3 - b3;
-		y7 = -x0 - ((b4 * 473 + b6 * 196 + 128) >> 8);
-		block[0 + i] = (b7 + y4 + 128) >> 8;
-		block[1 + i] = (x4 + y3 + 128) >> 8;
-		block[2 + i] = (y5 - x0 + 128) >> 8;
-		block[3 + i] = (y6 - y7 + 128) >> 8;
-		block[4 + i] = (y6 + y7 + 128) >> 8;
-		block[5 + i] = (x0 + y5 + 128) >> 8;
-		block[6 + i] = (y3 - x4 + 128) >> 8;
-		block[7 + i] = (y4 - b7 + 128) >> 8;
-	}
+    // Transform rows
+    for i in (0..64).step_by(8) {
+        b1 = block[4 + i];
+        b3 = block[2 + i] + block[6 + i];
+        b4 = block[5 + i] - block[3 + i];
+        tmp1 = block[1 + i] + block[7 + i];
+        tmp2 = block[3 + i] + block[5 + i];
+        b6 = block[1 + i] - block[7 + i];
+        b7 = tmp1 + tmp2;
+        m0 = block[0 + i];
+        x4 = ((b6 * 473 - b4 * 196 + 128) >> 8) - b7;
+        x0 = x4 - (((tmp1 - tmp2) * 362 + 128) >> 8);
+        x1 = m0 - b1;
+        x2 = (((block[2 + i] - block[6 + i]) * 362 + 128) >> 8) - b3;
+        x3 = m0 + b1;
+        y3 = x1 + x2;
+        y4 = x3 + b3;
+        y5 = x1 - x2;
+        y6 = x3 - b3;
+        y7 = -x0 - ((b4 * 473 + b6 * 196 + 128) >> 8);
+        block[0 + i] = (b7 + y4 + 128) >> 8;
+        block[1 + i] = (x4 + y3 + 128) >> 8;
+        block[2 + i] = (y5 - x0 + 128) >> 8;
+        block[3 + i] = (y6 - y7 + 128) >> 8;
+        block[4 + i] = (y6 + y7 + 128) >> 8;
+        block[5 + i] = (x0 + y5 + 128) >> 8;
+        block[6 + i] = (y3 - x4 + 128) >> 8;
+        block[7 + i] = (y4 - b7 + 128) >> 8;
+    }
 }
 
 pub struct MpegDecoder {
     pub stats: bool,
-    parse_picture_durations: Vec<std::time::Duration>
+    parse_picture_durations: Vec<std::time::Duration>,
 }
 
 impl MpegDecoder {
-
     pub fn new() -> Self {
-        MpegDecoder {stats: false, parse_picture_durations: vec![]}
+        MpegDecoder {
+            stats: false,
+            parse_picture_durations: vec![],
+        }
     }
 
-    pub fn parse_mpeg<T: FrameProcessor>(&mut self, path: &str, frame_handler: &mut T) -> io::Result<()> {
-
+    pub fn parse_mpeg<T: FrameProcessor>(
+        &mut self,
+        path: &str,
+        frame_handler: &mut T,
+    ) -> io::Result<()> {
         let mut f = OpenOptions::new()
             .read(true)
-            .open(path).expect("Unable to open file");
+            .open(path)
+            .expect("Unable to open file");
         let mut vidstream = MpegVideoStream::new(&mut f);
         let mut reader = io::BufReader::new(&mut vidstream);
 
@@ -1212,36 +1293,45 @@ impl MpegDecoder {
         let mut seqhdr: Option<SequenceHeader> = None;
 
         loop {
-
             match reader.read_exact(&mut buf) {
-                Ok(_) => {},
+                Ok(_) => {}
                 Err(e) => match e.kind() {
                     std::io::ErrorKind::UnexpectedEof => break,
-                    _ => return Err(e)
+                    _ => return Err(e),
                 },
             }
 
             if is_start_code(&buf, SEQUENCE_HEADER_START_VALUE) {
-
-                trace!("Sequence start code at offset {}.",
-                       reader.stream_position().unwrap() - 4);
+                trace!(
+                    "Sequence start code at offset {}.",
+                    reader.stream_position().unwrap() - 4
+                );
 
                 seqhdr = Some(SequenceHeader::new(&mut reader));
 
                 trace!("width: {}", seqhdr.as_ref().unwrap().hsize());
                 trace!("height: {}", seqhdr.as_ref().unwrap().vsize());
-                trace!("aspect ratio: {}", seqhdr.as_ref().unwrap().aspect_ratio_str());
+                trace!(
+                    "aspect ratio: {}",
+                    seqhdr.as_ref().unwrap().aspect_ratio_str()
+                );
                 trace!("frame rate: {}", seqhdr.as_ref().unwrap().frame_rate());
-
             } else if is_start_code(&buf, GROUP_OF_PICTURES_START_VALUE) {
-
-                trace!("Group of Pictures start code at offset {}.",
-                       reader.stream_position().unwrap() - 4);
+                trace!(
+                    "Group of Pictures start code at offset {}.",
+                    reader.stream_position().unwrap() - 4
+                );
 
                 let mut count = 0;
                 let hdr = GroupOfPictures::new(&mut reader).unwrap();
 
-                trace!("hour: {} minute: {} sec: {} frame: {}", hdr.hour(), hdr.min(), hdr.sec(), hdr.frame());
+                trace!(
+                    "hour: {} minute: {} sec: {} frame: {}",
+                    hdr.hour(),
+                    hdr.min(),
+                    hdr.sec(),
+                    hdr.frame()
+                );
 
                 loop {
                     count += 1;
@@ -1251,13 +1341,11 @@ impl MpegDecoder {
                     match self.parse_picture(&mut reader, &seqhdr.as_ref().unwrap()) {
                         Err(e) => match e.kind() {
                             std::io::ErrorKind::UnexpectedEof => break,
-                            _ => return Err(e)
+                            _ => return Err(e),
                         },
 
                         Ok(frame) => {
-
                             if frame.width > 0 && frame.height > 0 {
-
                                 if self.stats {
                                     self.parse_picture_durations.push(start.elapsed());
                                 }
@@ -1283,49 +1371,67 @@ impl MpegDecoder {
 
         if self.stats {
             self.parse_picture_durations.sort();
-            println!("len={},min={:?},p50={:?},p95={:?},p99={:?},max={:?}",
-                     self.parse_picture_durations.len(),
-                     self.parse_picture_durations[0],
-                     self.parse_picture_durations[self.parse_picture_durations.len()/2],
-                     self.parse_picture_durations[(self.parse_picture_durations.len()*95)/100],
-                     self.parse_picture_durations[(self.parse_picture_durations.len()*99)/100],
-                     self.parse_picture_durations[self.parse_picture_durations.len()-1]);
+            println!(
+                "len={},min={:?},p50={:?},p95={:?},p99={:?},max={:?}",
+                self.parse_picture_durations.len(),
+                self.parse_picture_durations[0],
+                self.parse_picture_durations[self.parse_picture_durations.len() / 2],
+                self.parse_picture_durations[(self.parse_picture_durations.len() * 95) / 100],
+                self.parse_picture_durations[(self.parse_picture_durations.len() * 99) / 100],
+                self.parse_picture_durations[self.parse_picture_durations.len() - 1]
+            );
         };
         Ok(())
     }
 
-    fn parse_picture<T: Read + Seek>(&self, f: &mut std::io::BufReader<T>, seqhdr: &SequenceHeader) -> io::Result<Frame> {
-
+    fn parse_picture<T: Read + Seek>(
+        &self,
+        f: &mut std::io::BufReader<T>,
+        seqhdr: &SequenceHeader,
+    ) -> io::Result<Frame> {
         let mut buf: [u8; 4] = [0; 4];
 
         f.read_exact(&mut buf)?;
         assert!(is_start_code(&buf, PICTURE_START_VALUE));
 
-        trace!("Picture start code at offset {}.",
-               f.stream_position().unwrap() - 4);
+        trace!(
+            "Picture start code at offset {}.",
+            f.stream_position().unwrap() - 4
+        );
 
         let hdr = PictureHeader::new(f).unwrap();
-        trace!("seq nr: {}, frame type: {}", hdr.sequence_nr(), hdr.frame_type());
+        trace!(
+            "seq nr: {}, frame type: {}",
+            hdr.sequence_nr(),
+            hdr.frame_type()
+        );
 
         if hdr.frame_type() != FRAME_TYPE_I {
-
             let frame_type = if hdr.frame_type() == FRAME_TYPE_I {
-                "I-frame" } else { "non-I-frame" };
-            trace!("Skipping {} @ offset {}", frame_type, f.stream_position().unwrap());
+                "I-frame"
+            } else {
+                "non-I-frame"
+            };
+            trace!(
+                "Skipping {} @ offset {}",
+                frame_type,
+                f.stream_position().unwrap()
+            );
 
             loop {
                 let start_code = next_start_code(f)?;
-                if start_code == GROUP_OF_PICTURES_START_VALUE ||
-                    start_code == SEQUENCE_HEADER_START_VALUE ||
-                    start_code == 0 {
-                        // Somehow return and continue regular control
-                        // flow in caller.  This is not an error but we
-                        // also cannot return a valid frame.
-                        //
-                        // The control flow should be cleaner once we
-                        // support P frames too.
-                        return Ok(Frame::new_dummy());
-                    }
+                if start_code == GROUP_OF_PICTURES_START_VALUE
+                    || start_code == SEQUENCE_HEADER_START_VALUE
+                    || start_code == 0
+                {
+                    // Somehow return and continue regular control
+                    // flow in caller.  This is not an error but we
+                    // also cannot return a valid frame.
+                    //
+                    // The control flow should be cleaner once we
+                    // support P frames too.
+                    return Ok(Frame::new_dummy());
+                }
                 f.seek_relative(4)?;
             }
         }
@@ -1333,8 +1439,7 @@ impl MpegDecoder {
         // Skip extensions and user data
         let mut start_code = next_start_code(f)?;
         loop {
-            if !(start_code == START_EXTENSION ||
-                 start_code == START_USER_DATA) {
+            if !(start_code == START_EXTENSION || start_code == START_USER_DATA) {
                 assert!(start_code >= 0x01 && start_code <= 0xAF);
                 // f.seek_relative(-4);
                 break;
@@ -1357,7 +1462,10 @@ impl MpegDecoder {
         }
 
         trace!("frame.y={:x?}", &container.frame.y.data[0..16]);
-        trace!("frame.y={:x?}", &container.frame.y.data[container.frame.y.data.len()-32..]);
+        trace!(
+            "frame.y={:x?}",
+            &container.frame.y.data[container.frame.y.data.len() - 32..]
+        );
         trace!("frame.cr={:x?}", &container.frame.cr.data[0..16]);
         trace!("frame.cb={:x?}", &container.frame.cb.data[0..16]);
 
@@ -1376,17 +1484,22 @@ mod tests {
 
     #[test]
     fn end_to_end() {
-        let fns = vec!["tests/sample_960x400_ocean_with_audio.mpeg",
-                       "tests/bjork-all-is-full-of-love.mpg"];
+        let fns = vec![
+            "tests/sample_960x400_ocean_with_audio.mpeg",
+            "tests/bjork-all-is-full-of-love.mpg",
+        ];
         let mut decoder = MpegDecoder::new();
         for filename in fns.iter() {
-            decoder.parse_mpeg(filename, &mut NoopFrameProcessor {}).unwrap();
+            decoder
+                .parse_mpeg(filename, &mut NoopFrameProcessor {})
+                .unwrap();
         }
     }
 
     #[test]
     fn idct() {
         // Test matrix taken from https://en.wikipedia.org/wiki/JPEG#Discrete_cosine_transform
+        #[rustfmt::skip]
         let mut m: [i32; 8*8] = [
             -416, -33, -60,  32,  48, -40, 0, 0,
                0, -24, -56,  19,  26,   0, 0, 0,
@@ -1397,10 +1510,11 @@ mod tests {
                0,   0,   0,   0,   0,   0, 0, 0,
                0,   0,   0,   0,   0,   0, 0, 0
         ];
-        let mut m2: [i32; 8*8] = m.clone();
+        let mut m2: [i32; 8 * 8] = m.clone();
 
         idct_23002_2::idct_23002_2(&mut m);
 
+        #[rustfmt::skip]
         let expect: [i32; 8*8] = [
             -66, -63, -71, -68, -56, -65, -68, -46,
             -71, -73, -72, -46, -20, -41, -66, -57,
@@ -1416,7 +1530,7 @@ mod tests {
         // The plm_video_idct() implementation requires pre-scaling of
         // the input matrix to compute results similar to the
         // idct_23002_2() implementation.
-        for i in 0 .. 64 {
+        for i in 0..64 {
             m2[i] *= VIDEO_PREMULTIPLIER_MATRIX[i];
         }
 
@@ -1427,7 +1541,7 @@ mod tests {
         // The two IDCT implementations do not compute identical
         // results, but the cumulative element-wise difference should
         // still be small.
-        for i in 0 .. 64 {
+        for i in 0..64 {
             delta += i32::abs(m2[i] - expect[i]);
         }
 
@@ -1443,7 +1557,8 @@ mod tests {
         use bitstream_io::BitRead;
         // let buf: [u8; 4] = [0x53, 0xf8, 0x7d, 0x29];
         // let cursor = io::Cursor::new(buf);
-        let mut stream: bitstream_io::BitReader<_, bitstream_io::BigEndian> = bitstream_io::BitReader::new(reader);
+        let mut stream: bitstream_io::BitReader<_, bitstream_io::BigEndian> =
+            bitstream_io::BitReader::new(reader);
         let other_scale: u8 = stream.read::<u8>(5).unwrap();
         println!("{}", other_scale);
 
@@ -1468,7 +1583,7 @@ mod tests {
         buf.extend(&[0; 8]);
         buf.extend(&[0, 0, 1, PICTURE_START_VALUE]);
         // bits 0-9 are 0; bits 10-12 equal FRAME_TYPE_I.
-        buf.extend(&[0,0b0000_1000,0,0,0,0,0,0]);
+        buf.extend(&[0, 0b0000_1000, 0, 0, 0, 0, 0, 0]);
         let cursor = io::Cursor::new(buf);
         let mut reader = io::BufReader::new(cursor);
         let seqhdr = SequenceHeader::new(&mut reader);
@@ -1492,17 +1607,28 @@ mod tests {
         let buf = [0b1101_0000];
         let cursor = io::Cursor::new(buf);
         let mut reader = io::BufReader::new(cursor);
-        let mut stream: bitstream_io::BitReader<_, bitstream_io::BigEndian> = bitstream_io::BitReader::new(&mut reader);
-        assert_eq!(parse_dct_dc_size(&VIDEO_DCT_SIZE_LUMINANCE, &mut stream).unwrap(), 4);
-        assert_eq!(parse_dct_dc_size(&VIDEO_DCT_SIZE_LUMINANCE, &mut stream).unwrap(), 0);
-        assert_eq!(parse_dct_dc_size(&VIDEO_DCT_SIZE_LUMINANCE, &mut stream).unwrap(), 1);
+        let mut stream: bitstream_io::BitReader<_, bitstream_io::BigEndian> =
+            bitstream_io::BitReader::new(&mut reader);
+        assert_eq!(
+            parse_dct_dc_size(&VIDEO_DCT_SIZE_LUMINANCE, &mut stream).unwrap(),
+            4
+        );
+        assert_eq!(
+            parse_dct_dc_size(&VIDEO_DCT_SIZE_LUMINANCE, &mut stream).unwrap(),
+            0
+        );
+        assert_eq!(
+            parse_dct_dc_size(&VIDEO_DCT_SIZE_LUMINANCE, &mut stream).unwrap(),
+            1
+        );
     }
 
     #[test]
     fn test_iso11172_stream() {
         let f = OpenOptions::new()
             .read(true)
-            .open("tests/bjork-v2-short-2.mpg").expect("Unable to open file");
+            .open("tests/bjork-v2-short-2.mpg")
+            .expect("Unable to open file");
         let mut reader = io::BufReader::new(f);
 
         let mut data = Vec::new();

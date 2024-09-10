@@ -1,34 +1,33 @@
-use std::fs::File;
-use std::io::{SeekFrom};
 use super::iso11172_stream;
+use std::fs::File;
+use std::io::SeekFrom;
 
 /// Provide a Reader that strips away system level packets and only
 /// returns video level data. This encapsulates parsing of system
 /// level packets and simplifies the decoder.
 pub struct MpegVideoStream {
-    cursor: std::io::Cursor<Vec<u8>>
+    cursor: std::io::Cursor<Vec<u8>>,
 }
 
 impl std::io::Read for MpegVideoStream {
-
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         self.cursor.read(buf)
     }
 }
 
 impl std::io::Seek for MpegVideoStream {
-
     fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
         self.cursor.seek(pos)
     }
 }
 
 impl MpegVideoStream {
-
     pub fn new(f: &mut File) -> MpegVideoStream {
         let mut buf = vec![];
         iso11172_stream(f, &mut buf).unwrap();
-        Self {cursor: std::io::Cursor::<Vec<u8>>::new(buf)}
+        Self {
+            cursor: std::io::Cursor::<Vec<u8>>::new(buf),
+        }
     }
 }
 

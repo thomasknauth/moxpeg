@@ -1,8 +1,8 @@
 use mpeg_ox::{MpegDecoder, PersistFrames};
 
 use gflags;
-use std::io;
 use std::env;
+use std::io;
 
 extern crate env_logger;
 
@@ -17,7 +17,6 @@ gflags::define! {
 // Extract key frames from a video source.
 
 fn main() -> io::Result<()> {
-
     env_logger::init();
     let _args = gflags::parse();
 
