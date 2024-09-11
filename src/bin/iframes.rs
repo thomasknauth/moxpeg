@@ -1,7 +1,6 @@
 use mpeg_ox::{MpegDecoder, PersistFrames};
 
 use gflags;
-use std::env;
 use std::io;
 
 extern crate env_logger;
@@ -22,10 +21,10 @@ fn main() -> io::Result<()> {
 
     if FILE.is_present() {
         let path = FILE.flag;
-        let mut decoder = MpegDecoder::new();
+        let mut decoder = MpegDecoder::new(path.to_str().unwrap())?;
 
         decoder.stats = STATS.is_present();
-        decoder.parse_mpeg(path.to_str().unwrap(), &mut PersistFrames::new())?;
+        decoder.parse_mpeg(&mut PersistFrames::new())?;
     } else {
         gflags::print_help_and_exit(0);
     }

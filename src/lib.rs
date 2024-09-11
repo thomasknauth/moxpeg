@@ -1265,35 +1265,43 @@ fn plm_video_idct(block: &mut [i32; 64]) {
 
 pub struct MpegDecoder {
     pub stats: bool,
+    reader: BufReader<MpegVideoStream>,
     parse_picture_durations: Vec<std::time::Duration>,
 }
 
 impl MpegDecoder {
-    pub fn new() -> Self {
-        MpegDecoder {
+    pub fn from_reader(reader: io::BufReader<MpegVideoStream>) -> io::Result<Self> {
+        Ok(Self {
             stats: false,
             parse_picture_durations: vec![],
-        }
+            reader,
+        })
+    }
+
+    pub fn new(path: &str) -> io::Result<Self> {
+
+        let mut f = OpenOptions::new()
+        .read(true)
+        .open(path)?;
+
+        Ok(MpegDecoder {
+            stats: false,
+            reader: io::BufReader::new(MpegVideoStream::new(&mut f)),
+            parse_picture_durations: vec![],
+        })
     }
 
     pub fn parse_mpeg<T: FrameProcessor>(
         &mut self,
-        path: &str,
         frame_handler: &mut T,
     ) -> io::Result<()> {
-        let mut f = OpenOptions::new()
-            .read(true)
-            .open(path)
-            .expect("Unable to open file");
-        let mut vidstream = MpegVideoStream::new(&mut f);
-        let mut reader = io::BufReader::new(&mut vidstream);
 
         let mut buf: [u8; 4] = [0; 4];
 
         let mut seqhdr: Option<SequenceHeader> = None;
 
         loop {
-            match reader.read_exact(&mut buf) {
+            match self.reader.read_exact(&mut buf) {
                 Ok(_) => {}
                 Err(e) => match e.kind() {
                     std::io::ErrorKind::UnexpectedEof => break,
@@ -1304,10 +1312,10 @@ impl MpegDecoder {
             if is_start_code(&buf, SEQUENCE_HEADER_START_VALUE) {
                 trace!(
                     "Sequence start code at offset {}.",
-                    reader.stream_position().unwrap() - 4
+                    self.reader.stream_position().unwrap() - 4
                 );
 
-                seqhdr = Some(SequenceHeader::new(&mut reader));
+                seqhdr = Some(SequenceHeader::new(&mut self.reader));
 
                 trace!("width: {}", seqhdr.as_ref().unwrap().hsize());
                 trace!("height: {}", seqhdr.as_ref().unwrap().vsize());
@@ -1319,11 +1327,11 @@ impl MpegDecoder {
             } else if is_start_code(&buf, GROUP_OF_PICTURES_START_VALUE) {
                 trace!(
                     "Group of Pictures start code at offset {}.",
-                    reader.stream_position().unwrap() - 4
+                    self.reader.stream_position().unwrap() - 4
                 );
 
                 let mut count = 0;
-                let hdr = GroupOfPictures::new(&mut reader).unwrap();
+                let hdr = GroupOfPictures::new(&mut self.reader).unwrap();
 
                 trace!(
                     "hour: {} minute: {} sec: {} frame: {}",
@@ -1338,7 +1346,7 @@ impl MpegDecoder {
 
                     let start = Instant::now();
 
-                    match self.parse_picture(&mut reader, &seqhdr.as_ref().unwrap()) {
+                    match self.parse_picture(&seqhdr.as_ref().unwrap()) {
                         Err(e) => match e.kind() {
                             std::io::ErrorKind::UnexpectedEof => break,
                             _ => return Err(e),
@@ -1356,8 +1364,8 @@ impl MpegDecoder {
                         }
                     }
 
-                    reader.read_exact(&mut buf)?;
-                    reader.seek_relative(-4)?;
+                    self.reader.read_exact(&mut buf)?;
+                    self.reader.seek_relative(-4)?;
 
                     if !is_start_code(&buf, PICTURE_START_VALUE) {
                         break;
@@ -1365,7 +1373,7 @@ impl MpegDecoder {
                 }
                 trace!("{} pictures in group.", count);
             } else {
-                reader.seek_relative(-3)?;
+                self.reader.seek_relative(-3)?;
             }
         }
 
@@ -1384,22 +1392,21 @@ impl MpegDecoder {
         Ok(())
     }
 
-    fn parse_picture<T: Read + Seek>(
-        &self,
-        f: &mut std::io::BufReader<T>,
+    pub fn parse_picture(
+        &mut self,
         seqhdr: &SequenceHeader,
     ) -> io::Result<Frame> {
         let mut buf: [u8; 4] = [0; 4];
 
-        f.read_exact(&mut buf)?;
+        self.reader.read_exact(&mut buf)?;
         assert!(is_start_code(&buf, PICTURE_START_VALUE));
 
         trace!(
             "Picture start code at offset {}.",
-            f.stream_position().unwrap() - 4
+            self.reader.stream_position().unwrap() - 4
         );
 
-        let hdr = PictureHeader::new(f).unwrap();
+        let hdr = PictureHeader::new(&mut self.reader).unwrap();
         trace!(
             "seq nr: {}, frame type: {}",
             hdr.sequence_nr(),
@@ -1415,11 +1422,11 @@ impl MpegDecoder {
             trace!(
                 "Skipping {} @ offset {}",
                 frame_type,
-                f.stream_position().unwrap()
+                self.reader.stream_position().unwrap()
             );
 
             loop {
-                let start_code = next_start_code(f)?;
+                let start_code = next_start_code(&mut self.reader)?;
                 if start_code == GROUP_OF_PICTURES_START_VALUE
                     || start_code == SEQUENCE_HEADER_START_VALUE
                     || start_code == 0
@@ -1432,28 +1439,28 @@ impl MpegDecoder {
                     // support P frames too.
                     return Ok(Frame::new_dummy());
                 }
-                f.seek_relative(4)?;
+                self.reader.seek_relative(4)?;
             }
         }
 
         // Skip extensions and user data
-        let mut start_code = next_start_code(f)?;
+        let mut start_code = next_start_code(&mut self.reader)?;
         loop {
             if !(start_code == START_EXTENSION || start_code == START_USER_DATA) {
                 assert!(start_code >= 0x01 && start_code <= 0xAF);
                 // f.seek_relative(-4);
                 break;
             }
-            start_code = next_start_code(f)?;
+            start_code = next_start_code(&mut self.reader)?;
         }
 
         let mut container = Container::new(seqhdr.hsize(), seqhdr.vsize());
 
         loop {
-            container.parse_slice(f, start_code).unwrap();
+            container.parse_slice(&mut self.reader, start_code).unwrap();
 
-            f.read_exact(&mut buf)?;
-            f.seek_relative(-4)?;
+            self.reader.read_exact(&mut buf)?;
+            self.reader.seek_relative(-4)?;
 
             if !is_slice_start_code(&buf) {
                 break;
@@ -1488,10 +1495,10 @@ mod tests {
             "tests/sample_960x400_ocean_with_audio.mpeg",
             "tests/bjork-all-is-full-of-love.mpg",
         ];
-        let mut decoder = MpegDecoder::new();
         for filename in fns.iter() {
+            let mut decoder = MpegDecoder::new(filename).unwrap();
             decoder
-                .parse_mpeg(filename, &mut NoopFrameProcessor {})
+                .parse_mpeg(&mut NoopFrameProcessor {})
                 .unwrap();
         }
     }
@@ -1587,8 +1594,8 @@ mod tests {
         let cursor = io::Cursor::new(buf);
         let mut reader = io::BufReader::new(cursor);
         let seqhdr = SequenceHeader::new(&mut reader);
-        let decoder = MpegDecoder::new();
-        decoder.parse_picture(&mut reader, &seqhdr).unwrap();
+        let decoder = MpegDecoder::from_reader(reader).unwrap();
+        decoder.parse_picture(&seqhdr).unwrap();
     }
 
     #[test]
